@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.env
+*.log
+.claude/
+test_visualizer.py
