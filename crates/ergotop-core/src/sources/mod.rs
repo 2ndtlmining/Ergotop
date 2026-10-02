@@ -4,6 +4,7 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+pub mod explorer;
 pub mod node;
 
 #[derive(Debug, thiserror::Error)]
