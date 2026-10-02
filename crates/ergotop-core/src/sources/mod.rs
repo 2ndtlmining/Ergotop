@@ -4,8 +4,10 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+pub mod addressbook;
 pub mod explorer;
 pub mod node;
+pub mod price;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {
