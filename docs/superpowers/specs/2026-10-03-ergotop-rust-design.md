@@ -110,7 +110,17 @@ All sources are optional. Each runs in its own tokio task, uses a 3s request tim
 
 Node tx JSON has `size`; outputs carry `ergoTree` (not address); inputs carry only `boxId`, hence the batched input resolution.
 
-Risk: `/utxo/withPool/byIds` needs a node with UTXO state. If it errors (e.g. digest-mode node), the node source still supplies the mempool, and input addresses/values for those txs are taken from an explorer when available, otherwise left unresolved (value computed from outputs only, flagged in detail view).
+**Indexed nodes (expected setup).** The user's LAN nodes are full UTXO-state nodes with `extraIndex` enabled. Ergotop detects this per node via `GET /blockchain/indexedHeight` (404 → not indexed) and then also uses:
+
+| Purpose | Endpoint | When |
+|---|---|---|
+| Index health (index lag = `fullHeight − indexedHeight`) | `GET /blockchain/indexedHeight` | with `/info` |
+| Token name + decimals (cached in memory, never refetched) | `GET /blockchain/token/byId/{tokenId}` | first time a token id is seen |
+| Detail for txs already mined | `GET /blockchain/transaction/byId/{txId}` | on demand (detail view) |
+
+With an indexed node active, Ergotop needs no explorer for any feature; explorers serve only as backup and cross-check. A node is shown as degraded (yellow) in the status bar if its index lags by more than 2 blocks; it remains usable for the mempool.
+
+Fallback for non-indexed or digest-mode nodes (not the expected setup, but handled): if `/utxo/withPool/byIds` errors, input addresses/values come from an explorer when available, otherwise are left unresolved (value computed from outputs only, flagged `approx`); token names come from an explorer, else the short token id is shown.
 
 Node selection: all healthy nodes are polled; the **active node** (shown in the status bar) is the first healthy node in config order. The canonical mempool follows the active node. Others feed the consistency view.
 
