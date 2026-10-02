@@ -1,0 +1,16 @@
+# Address-prefix rules for contracts that share a template but have no fixed address.
+
+[[rule]]
+name = "Spectrum"
+kind = "Service"
+address_prefix = "MUbV38YgqHy7XbsoXWF5z7EZm524Ybdwe5p9WDerbecviBcYLtRiXcqtyf55992zu5jbRFPqSobanaHpUpEFBEGio"
+
+[[rule]]
+name = "SkyHarbor"
+kind = "Service"
+address_prefix = "K9LerzPNHBdMqEjMiWwBMfbxQmxL8gDVDXTBZJJCDCVFGXCGCyEer"
+
+[[rule]]
+name = "Rosen Bridge"
+kind = "Service"
+address_prefix = "4L1ktFnzjG"

@@ -1,0 +1,12 @@
+[package]
+name = "ergotop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ergotop-core = { path = "../ergotop-core" }
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true

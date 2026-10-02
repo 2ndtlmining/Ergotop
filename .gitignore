@@ -12,3 +12,5 @@ env/
 *.log
 .claude/
 test_visualizer.py
+/.superpowers
+/target
