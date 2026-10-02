@@ -69,11 +69,11 @@ Ergotop/
       addressbook.rs            ergexplorer fetch, disk cache, embedded snapshot
       price.rs                  ERG/USD oracle
     reconcile.rs                canonical mempool, per-source views, mined vs dropped
+    ergotree.rs                 ErgoTree <-> address (base58 + checksum), no ergo-lib
+    metrics.rs                  fee / value / approx per tx
     classify/
-      mod.rs                    Classifier (lookup order), tx-level classification
-      ergotree.rs               address <-> ErgoTree (base58 + checksum), no ergo-lib
-      book.rs                   address book entries -> ErgoTree map
-      rules.rs                  contract-template rules (Spectrum, SkyHarbor, ...)
+      mod.rs                    Classifier (lookup order), tx-level classification, colors
+      builtin.rs                embedded builtin-addresses.toml + rules.toml
     packing.rs                  gravity packing + ERG hexagon mask
   crates/ergotop/src/
     main.rs                     CLI args, config load, terminal setup, panic hook
@@ -87,7 +87,8 @@ Ergotop/
     theme.rs                    4 themes ported from Python
   assets/
     addressbook-snapshot.json   refreshed at release time
-    rules.toml                  contract-template rules migrated from origins.py
+    builtin-addresses.toml      contract + pool addresses migrated from Python origins.py/config.py
+    rules.toml                  address-prefix rules migrated from origins.py
   docs/superpowers/specs/
 ```
 
@@ -155,13 +156,12 @@ Rules:
 
 ### 3.4 Classification
 
-All matching is on ErgoTree hex. Address-book and override addresses are converted to ErgoTree once at load:
-- P2PK: `0008cd` + 33-byte pubkey from the base58 payload.
-- P2S: payload bytes are the tree.
-- P2SH: match by the 24-byte script hash against output trees of the P2SH template.
-- Checksum validated (blake2b256, first 4 bytes); invalid entries are skipped with a warning.
+All matching is on mainnet address strings. Node data carries ErgoTrees, which are converted to addresses once when a tx is ingested (`ergotree.rs`, no ergo-lib):
+- Address bytes = `[network|type]` ++ content ++ checksum (first 4 bytes of blake2b256 of the preceding bytes).
+- Tree `0008cd` + 33-byte pubkey → P2PK (type `0x01`); any other tree → P2S (type `0x03`, content = tree bytes).
+- P2SH (type `0x02`) is not produced and P2SH entries are skipped; the ergexplorer book contains none (checked 2026-10-03).
 
-Lookup order per tree: local `addresses.toml` → address book → `rules.toml` contract templates (prefix/template match) → heuristics (P2PK → `P2P`, other → `Contract`) → `Unknown`.
+Lookup order per address: local `addresses.toml` → ergexplorer address book → built-in addresses (`assets/builtin-addresses.toml`, the ~155 contract and pool addresses migrated from the Python `origins.py`/`config.py`) → `assets/rules.toml` address-prefix rules (Spectrum, SkyHarbor, Rosen Bridge) → heuristics (P2PK → `P2P`, other → `Contract`) → `Unknown`.
 
 Tx-level classification: first named match among outputs (excluding fee), then among inputs. If both sides have distinct named matches, detail shows `From → To` (e.g. `Kucoin → Spectrum`); the tx's color/category is the output-side match.
 
