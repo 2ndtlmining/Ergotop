@@ -4,4 +4,5 @@ pub mod config;
 pub mod ergotree;
 pub mod metrics;
 pub mod model;
+pub mod reconcile;
 pub mod sources;
