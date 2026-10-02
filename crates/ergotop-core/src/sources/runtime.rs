@@ -1,5 +1,5 @@
 //! Per-source polling tasks feeding one event channel.
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -15,9 +15,10 @@ use crate::config::SourceSpec;
 use crate::model::{NodeInfo, SourceId, SourceKind, SourceStatus, TxId};
 
 const MAX_INDEX_LAG: u32 = 2;
-const TOKENS_PER_POLL: usize = 20;
+const FAILS_BEFORE_DOWN: u32 = 2;
 const BLOCKS_PER_POLL: u32 = 3;
 const BOOK_REFRESH: Duration = Duration::from_secs(24 * 3600);
+const BOOK_RETRY: Duration = Duration::from_secs(10 * 60);
 const PRICE_EVERY: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Copy, Debug)]
@@ -58,6 +59,26 @@ async fn send(tx: &mpsc::Sender<SourceEvent>, ev: SourceEvent) {
     let _ = tx.send(ev).await;
 }
 
+/// Marks a source Down only after `FAILS_BEFORE_DOWN` consecutive failures, so a single
+/// timeout or 5xx does not trigger a failover (and a resync) of the whole pool.
+async fn report_failure(
+    tx: &mpsc::Sender<SourceEvent>,
+    id: &SourceId,
+    fails: u32,
+    e: &super::SourceError,
+) {
+    if fails >= FAILS_BEFORE_DOWN {
+        send(
+            tx,
+            SourceEvent::Status {
+                source: id.clone(),
+                status: SourceStatus::Down(e.to_string()),
+            },
+        )
+        .await;
+    }
+}
+
 fn ms(d: Duration) -> u64 {
     d.as_millis() as u64
 }
@@ -70,7 +91,8 @@ pub async fn run_node(
 ) {
     let mut known: HashSet<TxId> = HashSet::new();
     let mut seen_tokens: HashSet<String> = HashSet::new();
-    let mut token_queue: VecDeque<String> = VecDeque::new();
+    let (token_tx, token_rx) = mpsc::unbounded_channel::<String>();
+    tokio::spawn(run_tokens(client.clone(), token_rx, tx.clone()));
     let mut last_height: u32 = 0;
     let mut fails: u32 = 0;
     let mut indexed = false;
@@ -102,14 +124,7 @@ pub async fn run_node(
                 }
                 Err(e) => {
                     fails += 1;
-                    send(
-                        &tx,
-                        SourceEvent::Status {
-                            source: id.clone(),
-                            status: SourceStatus::Down(e.to_string()),
-                        },
-                    )
-                    .await;
+                    report_failure(&tx, &id, fails, &e).await;
                     sleep(backoff(fails)).await;
                     continue;
                 }
@@ -146,7 +161,7 @@ pub async fn run_node(
                     for t in &new_txs {
                         for tok in t.outputs.iter().flat_map(|o| o.tokens.iter()) {
                             if seen_tokens.insert(tok.token_id.clone()) {
-                                token_queue.push_back(tok.token_id.clone());
+                                let _ = token_tx.send(tok.token_id.clone());
                             }
                         }
                     }
@@ -165,26 +180,10 @@ pub async fn run_node(
             }
             Err(e) => {
                 fails += 1;
-                send(
-                    &tx,
-                    SourceEvent::Status {
-                        source: id.clone(),
-                        status: SourceStatus::Down(e.to_string()),
-                    },
-                )
-                .await;
+                report_failure(&tx, &id, fails, &e).await;
                 next_info = Instant::now();
                 sleep(backoff(fails)).await;
                 continue;
-            }
-        }
-
-        for _ in 0..TOKENS_PER_POLL {
-            let Some(token_id) = token_queue.pop_front() else {
-                break;
-            };
-            if let Ok(meta) = client.token(&token_id).await {
-                send(&tx, SourceEvent::TokenMeta(meta)).await;
             }
         }
 
@@ -210,6 +209,19 @@ pub async fn run_node(
         }
 
         sleep(timing.node_mempool).await;
+    }
+}
+
+/// Fetches token metadata off the node's poll path; ends when `run_node` drops its sender.
+async fn run_tokens(
+    client: NodeClient,
+    mut ids: mpsc::UnboundedReceiver<String>,
+    tx: mpsc::Sender<SourceEvent>,
+) {
+    while let Some(token_id) = ids.recv().await {
+        if let Ok(meta) = client.token(&token_id).await {
+            send(&tx, SourceEvent::TokenMeta(meta)).await;
+        }
     }
 }
 
@@ -246,14 +258,7 @@ pub async fn run_explorer(
             }
             Err(e) => {
                 fails += 1;
-                send(
-                    &tx,
-                    SourceEvent::Status {
-                        source: id.clone(),
-                        status: SourceStatus::Down(e.to_string()),
-                    },
-                )
-                .await;
+                report_failure(&tx, &id, fails, &e).await;
                 sleep(backoff(fails)).await;
                 continue;
             }
@@ -293,6 +298,7 @@ pub async fn run_address_book(
     let (entries, mut refresh) = addressbook::initial(cache.as_deref());
     send(&tx, SourceEvent::AddressBook(entries)).await;
     while !tx.is_closed() {
+        let mut ok = true;
         if refresh {
             match addressbook::fetch(&http, &base).await {
                 Ok((raw, entries)) => {
@@ -301,11 +307,23 @@ pub async fn run_address_book(
                     }
                     send(&tx, SourceEvent::AddressBook(entries)).await;
                 }
-                Err(e) => tracing::warn!("address book refresh failed: {e}"),
+                Err(e) => {
+                    tracing::warn!("address book refresh failed: {e}");
+                    ok = false;
+                }
             }
         }
-        sleep(BOOK_REFRESH).await;
+        sleep(next_book_wait(ok)).await;
         refresh = true;
+    }
+}
+
+/// 24h after a good refresh; a failed one is retried after `BOOK_RETRY`.
+fn next_book_wait(fetched_ok: bool) -> Duration {
+    if fetched_ok {
+        BOOK_REFRESH
+    } else {
+        BOOK_RETRY
     }
 }
 
@@ -643,5 +661,155 @@ mod tests {
         assert!(matches!(&first[0], SourceEvent::AddressBook(e) if e.len() >= 300));
         assert!(matches!(&second[0], SourceEvent::AddressBook(e) if e.len() == 1));
         assert!(cache.exists(), "fetched book is cached");
+    }
+
+    #[tokio::test]
+    async fn single_explorer_failure_does_not_report_down() {
+        let s = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/transactions/unconfirmed"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&s)
+            .await;
+        mock(
+            &s,
+            "GET",
+            "/transactions/unconfirmed",
+            200,
+            include_str!("../../tests/fixtures/explorer/unconfirmed.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/api/v1/blocks",
+            200,
+            include_str!("../../tests/fixtures/explorer/blocks.json"),
+        )
+        .await;
+
+        let (tx, mut rx) = mpsc::channel(64);
+        let handle = tokio::spawn(run_explorer(
+            SourceId("p2p".into()),
+            ExplorerClient::new(http_client(), &s.uri()),
+            fast(),
+            tx,
+        ));
+        let events = collect(&mut rx, vec!["mempool"]).await;
+        handle.abort();
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                SourceEvent::Status {
+                    status: SourceStatus::Down(_),
+                    ..
+                }
+            )),
+            "one transient failure must not mark the source down: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_failures_report_down() {
+        let s = MockServer::start().await;
+        mock(&s, "GET", "/transactions/unconfirmed", 503, "").await;
+        let (tx, mut rx) = mpsc::channel(8);
+        let handle = tokio::spawn(run_explorer(
+            SourceId("p2p".into()),
+            ExplorerClient::new(http_client(), &s.uri()),
+            fast(),
+            tx,
+        ));
+        let events = collect(&mut rx, vec!["status"]).await;
+        handle.abort();
+        assert!(matches!(
+            &events[0],
+            SourceEvent::Status {
+                status: SourceStatus::Down(_),
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn slow_token_endpoint_does_not_stall_mempool_polling() {
+        let s = MockServer::start().await;
+        mock(
+            &s,
+            "GET",
+            "/info",
+            200,
+            include_str!("../../tests/fixtures/node/info.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/blockchain/indexedHeight",
+            200,
+            include_str!("../../tests/fixtures/node/indexed_height.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/transactions/unconfirmed/transactionIds",
+            200,
+            include_str!("../../tests/fixtures/node/mempool_ids.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "POST",
+            "/transactions/unconfirmed/byTransactionIds",
+            200,
+            include_str!("../../tests/fixtures/node/mempool_txs.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "POST",
+            "/utxo/withPool/byIds",
+            200,
+            include_str!("../../tests/fixtures/node/boxes.json"),
+        )
+        .await;
+        mock(&s, "GET", "/blocks/lastHeaders/3", 200, "[]").await;
+        Mock::given(method("GET"))
+            .and(path("/blockchain/token/byId/tok-1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(include_str!("../../tests/fixtures/node/token.json"))
+                    .set_delay(Duration::from_millis(2500)),
+            )
+            .mount(&s)
+            .await;
+
+        let (tx, mut rx) = mpsc::channel(256);
+        let handle = tokio::spawn(run_node(
+            SourceId("n".into()),
+            NodeClient::new(http_client(), &s.uri()),
+            fast(),
+            tx,
+        ));
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(2000);
+        let mut mempools = 0;
+        while let Ok(Some(ev)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(ev, SourceEvent::Mempool { .. }) {
+                mempools += 1;
+            }
+        }
+        handle.abort();
+        assert!(
+            mempools >= 3,
+            "only {mempools} mempool polls in 2s while a token fetch hung"
+        );
+    }
+
+    #[test]
+    fn failed_book_refresh_retries_within_minutes() {
+        assert_eq!(next_book_wait(true), Duration::from_secs(24 * 3600));
+        assert!(next_book_wait(false) <= Duration::from_secs(15 * 60));
     }
 }

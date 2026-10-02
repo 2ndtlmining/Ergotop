@@ -80,6 +80,11 @@ pub async fn fetch(http: &reqwest::Client, base: &str) -> Result<(String, Vec<Bo
     }
     let raw = resp.text().await?;
     let entries = parse(&raw)?;
+    if entries.is_empty() {
+        return Err(SourceError::Parse(
+            "address book response had no entries".into(),
+        ));
+    }
     Ok((raw, entries))
 }
 
@@ -160,5 +165,16 @@ mod tests {
         let (raw, entries) = fetch(&http_client(), &s.uri()).await.unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(raw, SAMPLE);
+    }
+
+    #[tokio::test]
+    async fn empty_book_from_api_is_rejected() {
+        let s = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/addressbook/getAddresses"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"items":[],"total":0}"#))
+            .mount(&s)
+            .await;
+        assert!(fetch(&http_client(), &s.uri()).await.is_err());
     }
 }

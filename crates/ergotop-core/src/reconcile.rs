@@ -6,8 +6,9 @@ use crate::metrics::{tx_metrics, TxMetrics};
 use crate::model::{Block, NodeInfo, SourceId, SourceKind, SourceStatus, Tx, TxId};
 use crate::sources::SourceEvent;
 
-/// Active polls a removed tx waits for its block before it is declared dropped.
-pub const DROP_GRACE_POLLS: u8 = 2;
+/// How long a removed tx waits for its block before it is declared dropped. Must exceed the
+/// slowest block-detection cadence (node headers 5s, explorer blocks 10s).
+pub const DROP_GRACE_MS: u64 = 15_000;
 const RECENT_BLOCKS: usize = 10;
 const EMPTY_GUARD_MIN: usize = 5;
 /// Public explorers are load-balanced and their snapshots flap; with an explorer active, a tx
@@ -54,7 +55,8 @@ pub struct Reconciler {
     pool: HashMap<TxId, TxEntry>,
     bodies: HashMap<TxId, Tx>,
     first_seen: HashMap<TxId, u64>,
-    pending: HashMap<TxId, u8>,
+    /// Removed from the pool, waiting for a block: id -> removal time (ms).
+    pending: HashMap<TxId, u64>,
     missing: HashMap<TxId, u8>,
     blocks: VecDeque<Block>,
     empty_strike: bool,
@@ -139,6 +141,12 @@ impl Reconciler {
                 if v.status == status {
                     return vec![];
                 }
+                if !status.usable() {
+                    // Forget the stale snapshot: the source must deliver a fresh mempool
+                    // before it can become active again or count in seen_by/only_in.
+                    v.ids.clear();
+                    v.last_update_ms = None;
+                }
                 v.status = status;
                 let mut out = vec![Update::SourcesChanged];
                 out.extend(self.reselect_active(cls));
@@ -219,7 +227,7 @@ impl Reconciler {
         if !reselected.is_empty() {
             out.extend(reselected);
         } else if self.active.as_ref() == Some(&source) {
-            out.extend(self.diff_active(idx, cls));
+            out.extend(self.diff_active(idx, now_ms, cls));
         }
         self.prune();
         out
@@ -232,6 +240,11 @@ impl Reconciler {
             .find(|v| v.status.usable() && v.last_update_ms.is_some())
             .map(|v| v.id.clone());
         if next == self.active {
+            return vec![];
+        }
+        if next.is_none() {
+            // No usable source left: keep showing the last pool (stale) rather than wiping it.
+            self.active = None;
             return vec![];
         }
         self.active = next;
@@ -257,7 +270,7 @@ impl Reconciler {
         self.pool = pool;
     }
 
-    fn diff_active(&mut self, idx: usize, cls: &Classifier) -> Vec<Update> {
+    fn diff_active(&mut self, idx: usize, now_ms: u64, cls: &Classifier) -> Vec<Update> {
         let (mut added, removed): (Vec<TxId>, Vec<TxId>) = {
             let active_ids = &self.views[idx].ids;
             let added = active_ids
@@ -280,13 +293,12 @@ impl Reconciler {
             self.pool.insert(id.clone(), entry);
         }
 
-        let mut dropped = Vec::new();
-        for (id, polls) in self.pending.iter_mut() {
-            *polls += 1;
-            if *polls >= DROP_GRACE_POLLS {
-                dropped.push(id.clone());
-            }
-        }
+        let mut dropped: Vec<TxId> = self
+            .pending
+            .iter()
+            .filter(|(_, removed_at)| now_ms.saturating_sub(**removed_at) >= DROP_GRACE_MS)
+            .map(|(id, _)| id.clone())
+            .collect();
         for id in &dropped {
             self.pending.remove(id);
         }
@@ -297,7 +309,7 @@ impl Reconciler {
             match self.block_height_of(&id) {
                 Some(h) => mined.entry(h).or_default().push(id),
                 None => {
-                    self.pending.insert(id, 0);
+                    self.pending.insert(id, now_ms);
                 }
             }
         }
@@ -523,12 +535,32 @@ mod tests {
     #[test]
     fn removal_without_block_is_dropped_after_grace() {
         let (mut r, c) = (rec(), cls());
-        r.apply(mempool(node(), &["a", "b"], &["a", "b"]), 1, &c);
-        assert_eq!(r.apply(mempool(node(), &["b"], &[]), 2, &c), vec![]);
-        assert_eq!(r.apply(mempool(node(), &["b"], &[]), 3, &c), vec![]);
+        r.apply(mempool(node(), &["a", "b"], &["a", "b"]), 1_000, &c);
+        assert_eq!(r.apply(mempool(node(), &["b"], &[]), 2_000, &c), vec![]);
+        assert_eq!(r.apply(mempool(node(), &["b"], &[]), 10_000, &c), vec![]);
         assert_eq!(
-            r.apply(mempool(node(), &["b"], &[]), 4, &c),
+            r.apply(mempool(node(), &["b"], &[]), 17_000, &c),
             vec![Update::Dropped(ids(&["a"]))]
+        );
+    }
+
+    #[test]
+    fn block_arriving_several_node_polls_after_removal_is_mined() {
+        let (mut r, c) = (rec(), cls());
+        r.apply(mempool(node(), &["a", "b"], &["a", "b"]), 1_000, &c);
+        for now in [2_000, 3_000, 4_000, 5_000, 6_000] {
+            assert_eq!(r.apply(mempool(node(), &["b"], &[]), now, &c), vec![]);
+        }
+        let u = r.apply(block("h1", 100, &["a"]), 6_500, &c);
+        assert_eq!(
+            u,
+            vec![
+                Update::BlockAdded(100),
+                Update::Mined {
+                    height: 100,
+                    tx_ids: ids(&["a"])
+                }
+            ]
         );
     }
 
@@ -635,16 +667,16 @@ mod tests {
     #[test]
     fn explorer_tx_missing_three_polls_is_removed_then_dropped() {
         let (mut r, c) = (explorers_only(), cls());
-        r.apply(mempool(expl(), &["a", "b"], &["a", "b"]), 1, &c);
-        assert_eq!(r.apply(mempool(expl(), &["b"], &[]), 2, &c), vec![]);
-        assert_eq!(r.apply(mempool(expl(), &["b"], &[]), 3, &c), vec![]);
-        assert_eq!(r.apply(mempool(expl(), &["b"], &[]), 4, &c), vec![]);
+        r.apply(mempool(expl(), &["a", "b"], &["a", "b"]), 1_000, &c);
+        assert_eq!(r.apply(mempool(expl(), &["b"], &[]), 6_000, &c), vec![]);
+        assert_eq!(r.apply(mempool(expl(), &["b"], &[]), 11_000, &c), vec![]);
+        assert_eq!(r.apply(mempool(expl(), &["b"], &[]), 16_000, &c), vec![]);
         assert!(
             !r.pool().contains_key("a"),
             "removed after 3 consecutive misses"
         );
-        r.apply(mempool(expl(), &["b"], &[]), 5, &c);
-        let u = r.apply(mempool(expl(), &["b"], &[]), 6, &c);
+        assert_eq!(r.apply(mempool(expl(), &["b"], &[]), 21_000, &c), vec![]);
+        let u = r.apply(mempool(expl(), &["b"], &[]), 31_000, &c);
         assert_eq!(u, vec![Update::Dropped(ids(&["a"]))]);
     }
 
@@ -672,5 +704,53 @@ mod tests {
                 tx_ids: ids(&["a"])
             }]
         );
+    }
+
+    #[test]
+    fn recovered_node_waits_for_fresh_snapshot_before_taking_over() {
+        let (mut r, c) = (rec(), cls());
+        r.apply(mempool(node(), &["a", "b"], &["a", "b"]), 1_000, &c);
+        r.apply(mempool(expl(), &["b", "c"], &["b", "c"]), 1_000, &c);
+        let down = SourceEvent::Status {
+            source: node(),
+            status: SourceStatus::Down("x".into()),
+        };
+        r.apply(down, 2_000, &c);
+        assert_eq!(r.active(), Some(&expl()));
+        assert!(
+            r.only_in(&node()).is_empty(),
+            "a down source's stale ids are forgotten"
+        );
+        let up = SourceEvent::Status {
+            source: node(),
+            status: SourceStatus::Up,
+        };
+        assert_eq!(r.apply(up, 3_000, &c), vec![Update::SourcesChanged]);
+        assert_eq!(
+            r.active(),
+            Some(&expl()),
+            "no switch back to a stale snapshot"
+        );
+        let u = r.apply(mempool(node(), &["c", "d"], &["c", "d"]), 4_000, &c);
+        assert_eq!(u, vec![Update::Resynced]);
+        assert_eq!(r.active(), Some(&node()));
+        let mut pool: Vec<&String> = r.pool().keys().collect();
+        pool.sort();
+        assert_eq!(pool, vec!["c", "d"]);
+    }
+
+    #[test]
+    fn losing_the_only_source_keeps_the_last_pool() {
+        let (mut r, c) = (Reconciler::new(vec![(expl(), SourceKind::Explorer)]), cls());
+        r.apply(mempool(expl(), &["a", "b"], &["a", "b"]), 1_000, &c);
+        let down = SourceEvent::Status {
+            source: expl(),
+            status: SourceStatus::Down("503".into()),
+        };
+        assert_eq!(r.apply(down, 2_000, &c), vec![Update::SourcesChanged]);
+        assert_eq!(r.pool().len(), 2, "pool is kept (stale) instead of wiped");
+        let u = r.apply(mempool(expl(), &["a", "b"], &[]), 3_000, &c);
+        assert_eq!(u, vec![Update::SourcesChanged, Update::Resynced]);
+        assert_eq!(r.pool().len(), 2);
     }
 }

@@ -126,6 +126,7 @@ fn to_tx(t: TxJson, resolved: &HashMap<String, BoxData>) -> Tx {
     }
 }
 
+#[derive(Clone)]
 pub struct NodeClient {
     http: reqwest::Client,
     base: String,
