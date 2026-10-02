@@ -8,6 +8,7 @@ pub mod addressbook;
 pub mod explorer;
 pub mod node;
 pub mod price;
+pub mod runtime;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {
