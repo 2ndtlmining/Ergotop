@@ -33,7 +33,9 @@ pub struct ExplorersConfig {
 
 impl Default for ExplorersConfig {
     fn default() -> Self {
-        Self { enabled: vec!["p2p".into(), "public".into()] }
+        Self {
+            enabled: vec!["p2p".into(), "public".into()],
+        }
     }
 }
 
@@ -47,7 +49,11 @@ pub struct UiConfig {
 
 impl Default for UiConfig {
     fn default() -> Self {
-        Self { theme: "neon-green".into(), fps: 30, start_view: "packing".into() }
+        Self {
+            theme: "neon-green".into(),
+            fps: 30,
+            start_view: "packing".into(),
+        }
     }
 }
 
@@ -87,7 +93,10 @@ impl Config {
     /// All sources in priority order: nodes (config order), then explorers.
     pub fn sources(&self) -> Vec<SourceSpec> {
         let nodes = if self.node.is_empty() {
-            vec![NodeConfig { url: DEFAULT_NODE_URL.into(), name: Some("local".into()) }]
+            vec![NodeConfig {
+                url: DEFAULT_NODE_URL.into(),
+                name: Some("local".into()),
+            }]
         } else {
             self.node.clone()
         };
@@ -195,7 +204,10 @@ mod tests {
     #[test]
     fn env_overrides_replace_lists() {
         let mut cfg = Config::default();
-        cfg.apply_env(Some("http://10.0.0.5:9053".into()), Some("https://my-explorer.example".into()));
+        cfg.apply_env(
+            Some("http://10.0.0.5:9053".into()),
+            Some("https://my-explorer.example".into()),
+        );
         let specs = cfg.sources();
         assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].url, "http://10.0.0.5:9053");
@@ -206,7 +218,11 @@ mod tests {
     #[test]
     fn load_from_dir_reads_both_files() {
         let dir = temp_dir("both");
-        std::fs::write(dir.join("ergotop.toml"), "[[node]]\nurl = \"http://n:9053\"\n").unwrap();
+        std::fs::write(
+            dir.join("ergotop.toml"),
+            "[[node]]\nurl = \"http://n:9053\"\n",
+        )
+        .unwrap();
         std::fs::write(
             dir.join("addresses.toml"),
             "[[address]]\naddress = \"9f\"\nname = \"Mine\"\n",

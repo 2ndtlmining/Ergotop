@@ -39,9 +39,14 @@ const RULES_TOML: &str = include_str!("../../../../assets/rules.toml");
 impl Builtin {
     /// Parses the embedded assets. Panics only if the shipped assets are malformed (covered by tests).
     pub fn load() -> Builtin {
-        let a: AddressesToml = toml::from_str(ADDRESSES_TOML).expect("assets/builtin-addresses.toml");
+        let a: AddressesToml =
+            toml::from_str(ADDRESSES_TOML).expect("assets/builtin-addresses.toml");
         let r: RulesToml = toml::from_str(RULES_TOML).expect("assets/rules.toml");
-        Builtin { addresses: a.address, colors: a.colors, rules: r.rule }
+        Builtin {
+            addresses: a.address,
+            colors: a.colors,
+            rules: r.rule,
+        }
     }
 }
 
@@ -54,6 +59,9 @@ mod tests {
         let b = Builtin::load();
         assert!(b.addresses.len() >= 150, "got {}", b.addresses.len());
         assert_eq!(b.rules.len(), 3);
-        assert_eq!(b.colors.get("Spectrum").map(String::as_str), Some("#3498db"));
+        assert_eq!(
+            b.colors.get("Spectrum").map(String::as_str),
+            Some("#3498db")
+        );
     }
 }

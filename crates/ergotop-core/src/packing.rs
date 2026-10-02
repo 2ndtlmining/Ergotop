@@ -88,7 +88,12 @@ fn mask(width: u16, height: u16, shape: Shape) -> (Vec<u16>, Vec<u16>) {
 }
 
 /// Places (index, side) items into one region; returns (index, x, y) and the count not placed.
-fn pack_region(items: &[(usize, u16)], width: u16, height: u16, shape: Shape) -> (Vec<(usize, u16, u16)>, usize) {
+fn pack_region(
+    items: &[(usize, u16)],
+    width: u16,
+    height: u16,
+    shape: Shape,
+) -> (Vec<(usize, u16, u16)>, usize) {
     let (lo, hi) = mask(width, height, shape);
     let mut sky = lo.clone();
     let mut out = Vec::with_capacity(items.len());
@@ -109,9 +114,7 @@ fn pack_region(items: &[(usize, u16)], width: u16, height: u16, shape: Shape) ->
         }
         match best {
             Some((y, x)) => {
-                for c in x as usize..(x + side) as usize {
-                    sky[c] = y + side;
-                }
+                sky[x as usize..(x + side) as usize].fill(y + side);
                 out.push((idx, x, y));
             }
             None => not_shown += 1,
@@ -122,7 +125,11 @@ fn pack_region(items: &[(usize, u16)], width: u16, height: u16, shape: Shape) ->
 
 pub fn pack(items: &[PackItem], p: &PackParams) -> PackResult {
     let mut by_rate: Vec<usize> = (0..items.len()).collect();
-    by_rate.sort_by(|&a, &b| fee_rate(&items[b]).cmp(&fee_rate(&items[a])).then_with(|| items[a].id.cmp(&items[b].id)));
+    by_rate.sort_by(|&a, &b| {
+        fee_rate(&items[b])
+            .cmp(&fee_rate(&items[a]))
+            .then_with(|| items[a].id.cmp(&items[b].id))
+    });
 
     let mut block = Vec::new();
     let mut overflow = Vec::new();
@@ -138,16 +145,32 @@ pub fn pack(items: &[PackItem], p: &PackParams) -> PackResult {
     }
 
     let sized = |idxs: &[usize]| {
-        let mut v: Vec<(usize, u16)> = idxs.iter().map(|&i| (i, side_for(items[i].size_bytes, p.max_side))).collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| items[a.0].id.cmp(&items[b.0].id)));
+        let mut v: Vec<(usize, u16)> = idxs
+            .iter()
+            .map(|&i| (i, side_for(items[i].size_bytes, p.max_side)))
+            .collect();
+        v.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| items[a.0].id.cmp(&items[b.0].id))
+        });
         v
     };
 
-    let mut result = PackResult { block_bytes, block_count: block.len(), ..Default::default() };
+    let mut result = PackResult {
+        block_bytes,
+        block_count: block.len(),
+        ..Default::default()
+    };
     let (placed, hidden) = pack_region(&sized(&block), p.width, p.block_height, p.shape);
     result.not_shown += hidden;
     for (i, x, y) in placed {
-        result.placed.push(Placed { id: items[i].id.clone(), x, y, side: side_for(items[i].size_bytes, p.max_side), region: Region::Block });
+        result.placed.push(Placed {
+            id: items[i].id.clone(),
+            x,
+            y,
+            side: side_for(items[i].size_bytes, p.max_side),
+            region: Region::Block,
+        });
     }
     let (placed, hidden) = pack_region(&sized(&overflow), p.width, p.overflow_height, Shape::Rect);
     result.not_shown += hidden;
@@ -169,11 +192,22 @@ mod tests {
     use proptest::prelude::*;
 
     fn item(id: &str, size: u32, fee: u64) -> PackItem {
-        PackItem { id: id.into(), size_bytes: size, fee }
+        PackItem {
+            id: id.into(),
+            size_bytes: size,
+            fee,
+        }
     }
 
     fn params(width: u16, block_height: u16, capacity: u32, shape: Shape) -> PackParams {
-        PackParams { width, block_height, overflow_height: 20, capacity_bytes: capacity, max_side: 6, shape }
+        PackParams {
+            width,
+            block_height,
+            overflow_height: 20,
+            capacity_bytes: capacity,
+            max_side: 6,
+            shape,
+        }
     }
 
     #[test]
@@ -186,7 +220,11 @@ mod tests {
 
     #[test]
     fn selects_block_by_fee_rate() {
-        let items = [item("a", 600, 6000), item("b", 600, 600), item("c", 300, 3000)];
+        let items = [
+            item("a", 600, 6000),
+            item("b", 600, 600),
+            item("c", 300, 3000),
+        ];
         let r = pack(&items, &params(40, 40, 1000, Shape::Rect));
         let region = |id: &str| r.placed.iter().find(|p| p.id == id).unwrap().region;
         assert_eq!(region("a"), Region::Block);
@@ -199,7 +237,14 @@ mod tests {
     #[test]
     fn gravity_fills_bottom_row_left_to_right() {
         let items = [item("a", 1, 1), item("b", 1, 1)];
-        let p = PackParams { width: 4, block_height: 4, overflow_height: 0, capacity_bytes: 100, max_side: 2, shape: Shape::Rect };
+        let p = PackParams {
+            width: 4,
+            block_height: 4,
+            overflow_height: 0,
+            capacity_bytes: 100,
+            max_side: 2,
+            shape: Shape::Rect,
+        };
         let r = pack(&items, &p);
         let pos: Vec<(u16, u16)> = r.placed.iter().map(|p| (p.x, p.y)).collect();
         assert_eq!(pos, vec![(0, 0), (1, 0)]);
@@ -208,7 +253,14 @@ mod tests {
     #[test]
     fn items_that_do_not_fit_are_counted() {
         let items: Vec<PackItem> = (0..10).map(|i| item(&format!("t{i}"), 20_000, 1)).collect();
-        let p = PackParams { width: 6, block_height: 6, overflow_height: 0, capacity_bytes: u32::MAX, max_side: 6, shape: Shape::Rect };
+        let p = PackParams {
+            width: 6,
+            block_height: 6,
+            overflow_height: 0,
+            capacity_bytes: u32::MAX,
+            max_side: 6,
+            shape: Shape::Rect,
+        };
         let r = pack(&items, &p);
         assert_eq!(r.placed.len(), 1);
         assert_eq!(r.not_shown, 9);

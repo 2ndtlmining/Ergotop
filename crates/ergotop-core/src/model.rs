@@ -106,7 +106,9 @@ pub fn nano_to_erg(n: u64) -> f64 {
 
 /// The miner reward box among a block's first (emission) transaction outputs.
 pub fn find_miner_reward(outputs: &[BoxData]) -> Option<&BoxData> {
-    outputs.iter().find(|o| o.address.starts_with(MINER_REWARD_PREFIX))
+    outputs
+        .iter()
+        .find(|o| o.address.starts_with(MINER_REWARD_PREFIX))
 }
 
 #[cfg(test)]
@@ -129,7 +131,10 @@ pub(crate) mod test_util {
             size,
             inputs: inputs
                 .into_iter()
-                .map(|b| Input { box_id: b.box_id.clone(), resolved: Some(b) })
+                .map(|b| Input {
+                    box_id: b.box_id.clone(),
+                    resolved: Some(b),
+                })
                 .collect(),
             outputs,
             creation_ts_ms: None,
@@ -151,7 +156,10 @@ mod tests {
     fn finds_miner_reward_output() {
         let outs = vec![
             test_util::bx("2Z4YBkDsDvQj8B", 1_170_924_000_000_000),
-            test_util::bx("88dhgzEuTXaRQTX5KNdnaWTTX7fEZVEQRn6qP4MJotPuRnS3QpoJxYpSaXoU1y7SHp8ZXMp92TH22DBY", 12_000_000_000),
+            test_util::bx(
+                "88dhgzEuTXaRQTX5KNdnaWTTX7fEZVEQRn6qP4MJotPuRnS3QpoJxYpSaXoU1y7SHp8ZXMp92TH22DBY",
+                12_000_000_000,
+            ),
         ];
         let reward = find_miner_reward(&outs).expect("reward output");
         assert_eq!(reward.value, 12_000_000_000);

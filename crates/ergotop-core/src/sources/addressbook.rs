@@ -25,11 +25,16 @@ struct BookItem {
 }
 
 pub fn parse(json: &str) -> Result<Vec<BookEntry>> {
-    let page: BookPage = serde_json::from_str(json).map_err(|e| SourceError::Parse(e.to_string()))?;
+    let page: BookPage =
+        serde_json::from_str(json).map_err(|e| SourceError::Parse(e.to_string()))?;
     Ok(page
         .items
         .into_iter()
-        .map(|i| BookEntry { address: i.address, name: i.name, kind: Kind::parse(&i.kind) })
+        .map(|i| BookEntry {
+            address: i.address,
+            name: i.name,
+            kind: Kind::parse(&i.kind),
+        })
         .collect())
 }
 
@@ -38,7 +43,9 @@ pub fn snapshot() -> Vec<BookEntry> {
 }
 
 pub fn is_stale(modified: SystemTime, now: SystemTime) -> bool {
-    now.duration_since(modified).map(|age| age > MAX_AGE).unwrap_or(false)
+    now.duration_since(modified)
+        .map(|age| age > MAX_AGE)
+        .unwrap_or(false)
 }
 
 pub fn load_cache(path: &Path) -> Option<(Vec<BookEntry>, SystemTime)> {

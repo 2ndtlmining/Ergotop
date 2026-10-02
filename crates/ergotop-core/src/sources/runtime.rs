@@ -62,7 +62,12 @@ fn ms(d: Duration) -> u64 {
     d.as_millis() as u64
 }
 
-pub async fn run_node(id: SourceId, client: NodeClient, timing: Timing, tx: mpsc::Sender<SourceEvent>) {
+pub async fn run_node(
+    id: SourceId,
+    client: NodeClient,
+    timing: Timing,
+    tx: mpsc::Sender<SourceEvent>,
+) {
     let mut known: HashSet<TxId> = HashSet::new();
     let mut seen_tokens: HashSet<String> = HashSet::new();
     let mut token_queue: VecDeque<String> = VecDeque::new();
@@ -77,13 +82,34 @@ pub async fn run_node(id: SourceId, client: NodeClient, timing: Timing, tx: mpsc
             match client.info().await {
                 Ok(info) => {
                     indexed = info.indexed_height.is_some();
-                    send(&tx, SourceEvent::Status { source: id.clone(), status: node_status(&info) }).await;
-                    send(&tx, SourceEvent::Info { source: id.clone(), info }).await;
+                    send(
+                        &tx,
+                        SourceEvent::Status {
+                            source: id.clone(),
+                            status: node_status(&info),
+                        },
+                    )
+                    .await;
+                    send(
+                        &tx,
+                        SourceEvent::Info {
+                            source: id.clone(),
+                            info,
+                        },
+                    )
+                    .await;
                     next_info = Instant::now() + timing.node_info;
                 }
                 Err(e) => {
                     fails += 1;
-                    send(&tx, SourceEvent::Status { source: id.clone(), status: SourceStatus::Down(e.to_string()) }).await;
+                    send(
+                        &tx,
+                        SourceEvent::Status {
+                            source: id.clone(),
+                            status: SourceStatus::Down(e.to_string()),
+                        },
+                    )
+                    .await;
                     sleep(backoff(fails)).await;
                     continue;
                 }
@@ -93,8 +119,15 @@ pub async fn run_node(id: SourceId, client: NodeClient, timing: Timing, tx: mpsc
         let started = Instant::now();
         let polled = match client.mempool_ids().await {
             Ok(ids) => {
-                let new_ids: Vec<TxId> = ids.iter().filter(|i| !known.contains(*i)).cloned().collect();
-                client.mempool_txs(&new_ids).await.map(|new_txs| (ids, new_ids, new_txs))
+                let new_ids: Vec<TxId> = ids
+                    .iter()
+                    .filter(|i| !known.contains(*i))
+                    .cloned()
+                    .collect();
+                client
+                    .mempool_txs(&new_ids)
+                    .await
+                    .map(|new_txs| (ids, new_ids, new_txs))
             }
             Err(e) => Err(e),
         };
@@ -102,8 +135,13 @@ pub async fn run_node(id: SourceId, client: NodeClient, timing: Timing, tx: mpsc
             Ok((ids, new_ids, new_txs)) => {
                 fails = 0;
                 let returned: HashSet<&TxId> = new_txs.iter().map(|t| &t.id).collect();
-                let missing: HashSet<&TxId> = new_ids.iter().filter(|i| !returned.contains(i)).collect();
-                known = ids.iter().filter(|i| !missing.contains(i)).cloned().collect();
+                let missing: HashSet<&TxId> =
+                    new_ids.iter().filter(|i| !returned.contains(i)).collect();
+                known = ids
+                    .iter()
+                    .filter(|i| !missing.contains(i))
+                    .cloned()
+                    .collect();
                 if indexed {
                     for t in &new_txs {
                         for tok in t.outputs.iter().flat_map(|o| o.tokens.iter()) {
@@ -114,11 +152,27 @@ pub async fn run_node(id: SourceId, client: NodeClient, timing: Timing, tx: mpsc
                     }
                 }
                 let latency_ms = ms(started.elapsed());
-                send(&tx, SourceEvent::Mempool { source: id.clone(), ids, new_txs, latency_ms }).await;
+                send(
+                    &tx,
+                    SourceEvent::Mempool {
+                        source: id.clone(),
+                        ids,
+                        new_txs,
+                        latency_ms,
+                    },
+                )
+                .await;
             }
             Err(e) => {
                 fails += 1;
-                send(&tx, SourceEvent::Status { source: id.clone(), status: SourceStatus::Down(e.to_string()) }).await;
+                send(
+                    &tx,
+                    SourceEvent::Status {
+                        source: id.clone(),
+                        status: SourceStatus::Down(e.to_string()),
+                    },
+                )
+                .await;
                 next_info = Instant::now();
                 sleep(backoff(fails)).await;
                 continue;
@@ -126,7 +180,9 @@ pub async fn run_node(id: SourceId, client: NodeClient, timing: Timing, tx: mpsc
         }
 
         for _ in 0..TOKENS_PER_POLL {
-            let Some(token_id) = token_queue.pop_front() else { break };
+            let Some(token_id) = token_queue.pop_front() else {
+                break;
+            };
             if let Ok(meta) = client.token(&token_id).await {
                 send(&tx, SourceEvent::TokenMeta(meta)).await;
             }
@@ -139,7 +195,14 @@ pub async fn run_node(id: SourceId, client: NodeClient, timing: Timing, tx: mpsc
                 for h in headers {
                     if let Ok(block) = client.block(&h).await {
                         last_height = h.height;
-                        send(&tx, SourceEvent::Block { source: id.clone(), block }).await;
+                        send(
+                            &tx,
+                            SourceEvent::Block {
+                                source: id.clone(),
+                                block,
+                            },
+                        )
+                        .await;
                     }
                 }
             }
@@ -150,7 +213,12 @@ pub async fn run_node(id: SourceId, client: NodeClient, timing: Timing, tx: mpsc
     }
 }
 
-pub async fn run_explorer(id: SourceId, client: ExplorerClient, timing: Timing, tx: mpsc::Sender<SourceEvent>) {
+pub async fn run_explorer(
+    id: SourceId,
+    client: ExplorerClient,
+    timing: Timing,
+    tx: mpsc::Sender<SourceEvent>,
+) {
     let mut known: HashSet<TxId> = HashSet::new();
     let mut last_height: u32 = 0;
     let mut fails: u32 = 0;
@@ -165,11 +233,27 @@ pub async fn run_explorer(id: SourceId, client: ExplorerClient, timing: Timing, 
                 let new_txs = txs.into_iter().filter(|t| !known.contains(&t.id)).collect();
                 known = ids.iter().cloned().collect();
                 let latency_ms = ms(started.elapsed());
-                send(&tx, SourceEvent::Mempool { source: id.clone(), ids, new_txs, latency_ms }).await;
+                send(
+                    &tx,
+                    SourceEvent::Mempool {
+                        source: id.clone(),
+                        ids,
+                        new_txs,
+                        latency_ms,
+                    },
+                )
+                .await;
             }
             Err(e) => {
                 fails += 1;
-                send(&tx, SourceEvent::Status { source: id.clone(), status: SourceStatus::Down(e.to_string()) }).await;
+                send(
+                    &tx,
+                    SourceEvent::Status {
+                        source: id.clone(),
+                        status: SourceStatus::Down(e.to_string()),
+                    },
+                )
+                .await;
                 sleep(backoff(fails)).await;
                 continue;
             }
@@ -182,7 +266,14 @@ pub async fn run_explorer(id: SourceId, client: ExplorerClient, timing: Timing, 
                 for r in refs {
                     if let Ok(block) = client.block(&r.id).await {
                         last_height = r.height;
-                        send(&tx, SourceEvent::Block { source: id.clone(), block }).await;
+                        send(
+                            &tx,
+                            SourceEvent::Block {
+                                source: id.clone(),
+                                block,
+                            },
+                        )
+                        .await;
                     }
                 }
             }
@@ -228,21 +319,40 @@ pub async fn run_price(http: reqwest::Client, tx: mpsc::Sender<SourceEvent>) {
 }
 
 /// Spawns one task per source plus address book and price. Call inside a tokio runtime.
-pub fn spawn_all(specs: &[SourceSpec], timing: Timing, cache_dir: Option<PathBuf>) -> mpsc::Receiver<SourceEvent> {
+pub fn spawn_all(
+    specs: &[SourceSpec],
+    timing: Timing,
+    cache_dir: Option<PathBuf>,
+) -> mpsc::Receiver<SourceEvent> {
     let (tx, rx) = mpsc::channel(1024);
     let http = http_client();
     for s in specs {
         match s.kind {
             SourceKind::Node => {
-                tokio::spawn(run_node(s.id.clone(), NodeClient::new(http.clone(), &s.url), timing, tx.clone()));
+                tokio::spawn(run_node(
+                    s.id.clone(),
+                    NodeClient::new(http.clone(), &s.url),
+                    timing,
+                    tx.clone(),
+                ));
             }
             SourceKind::Explorer => {
-                tokio::spawn(run_explorer(s.id.clone(), ExplorerClient::new(http.clone(), &s.url), timing, tx.clone()));
+                tokio::spawn(run_explorer(
+                    s.id.clone(),
+                    ExplorerClient::new(http.clone(), &s.url),
+                    timing,
+                    tx.clone(),
+                ));
             }
         }
     }
     let cache = addressbook::default_cache_path(cache_dir);
-    tokio::spawn(run_address_book(http.clone(), addressbook::BOOK_API.to_string(), cache, tx.clone()));
+    tokio::spawn(run_address_book(
+        http.clone(),
+        addressbook::BOOK_API.to_string(),
+        cache,
+        tx.clone(),
+    ));
     tokio::spawn(run_price(http, tx));
     rx
 }
@@ -256,7 +366,13 @@ mod tests {
 
     fn fast() -> Timing {
         let ms = Duration::from_millis(50);
-        Timing { node_mempool: ms, node_info: ms, node_headers: ms, explorer_mempool: ms, explorer_blocks: ms }
+        Timing {
+            node_mempool: ms,
+            node_info: ms,
+            node_headers: ms,
+            explorer_mempool: ms,
+            explorer_blocks: ms,
+        }
     }
 
     async fn mock(server: &MockServer, verb: &str, p: &str, status: u16, body: &str) {
@@ -268,11 +384,17 @@ mod tests {
     }
 
     /// Collects events until every wanted event kind has arrived or 10s pass.
-    async fn collect(rx: &mut mpsc::Receiver<SourceEvent>, mut want: Vec<&'static str>) -> Vec<SourceEvent> {
+    async fn collect(
+        rx: &mut mpsc::Receiver<SourceEvent>,
+        mut want: Vec<&'static str>,
+    ) -> Vec<SourceEvent> {
         let mut got = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         while !want.is_empty() {
-            let ev = tokio::time::timeout_at(deadline, rx.recv()).await.expect("timed out").expect("closed");
+            let ev = tokio::time::timeout_at(deadline, rx.recv())
+                .await
+                .expect("timed out")
+                .expect("closed");
             let kind = match &ev {
                 SourceEvent::Status { .. } => "status",
                 SourceEvent::Mempool { .. } => "mempool",
@@ -297,10 +419,17 @@ mod tests {
 
     #[test]
     fn index_lag_degrades() {
-        let mut info = NodeInfo { full_height: 100, indexed_height: Some(99), ..Default::default() };
+        let mut info = NodeInfo {
+            full_height: 100,
+            indexed_height: Some(99),
+            ..Default::default()
+        };
         assert_eq!(node_status(&info), SourceStatus::Up);
         info.indexed_height = Some(90);
-        assert_eq!(node_status(&info), SourceStatus::Degraded("index lag 10".into()));
+        assert_eq!(
+            node_status(&info),
+            SourceStatus::Degraded("index lag 10".into())
+        );
         info.indexed_height = None;
         assert_eq!(node_status(&info), SourceStatus::Up);
     }
@@ -308,31 +437,110 @@ mod tests {
     #[tokio::test]
     async fn node_loop_emits_info_mempool_block_and_tokens() {
         let s = MockServer::start().await;
-        mock(&s, "GET", "/info", 200, include_str!("../../tests/fixtures/node/info.json")).await;
-        mock(&s, "GET", "/blockchain/indexedHeight", 200, include_str!("../../tests/fixtures/node/indexed_height.json")).await;
-        mock(&s, "GET", "/transactions/unconfirmed/transactionIds", 200, include_str!("../../tests/fixtures/node/mempool_ids.json")).await;
-        mock(&s, "POST", "/transactions/unconfirmed/byTransactionIds", 200, include_str!("../../tests/fixtures/node/mempool_txs.json")).await;
-        mock(&s, "POST", "/utxo/withPool/byIds", 200, include_str!("../../tests/fixtures/node/boxes.json")).await;
-        mock(&s, "GET", "/blocks/lastHeaders/3", 200, include_str!("../../tests/fixtures/node/last_headers.json")).await;
-        mock(&s, "GET", "/blocks/hdr-0/transactions", 200, include_str!("../../tests/fixtures/node/block_txs.json")).await;
-        mock(&s, "GET", "/blocks/hdr-1/transactions", 200, include_str!("../../tests/fixtures/node/block_txs.json")).await;
-        mock(&s, "GET", "/blockchain/token/byId/tok-1", 200, include_str!("../../tests/fixtures/node/token.json")).await;
+        mock(
+            &s,
+            "GET",
+            "/info",
+            200,
+            include_str!("../../tests/fixtures/node/info.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/blockchain/indexedHeight",
+            200,
+            include_str!("../../tests/fixtures/node/indexed_height.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/transactions/unconfirmed/transactionIds",
+            200,
+            include_str!("../../tests/fixtures/node/mempool_ids.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "POST",
+            "/transactions/unconfirmed/byTransactionIds",
+            200,
+            include_str!("../../tests/fixtures/node/mempool_txs.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "POST",
+            "/utxo/withPool/byIds",
+            200,
+            include_str!("../../tests/fixtures/node/boxes.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/blocks/lastHeaders/3",
+            200,
+            include_str!("../../tests/fixtures/node/last_headers.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/blocks/hdr-0/transactions",
+            200,
+            include_str!("../../tests/fixtures/node/block_txs.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/blocks/hdr-1/transactions",
+            200,
+            include_str!("../../tests/fixtures/node/block_txs.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/blockchain/token/byId/tok-1",
+            200,
+            include_str!("../../tests/fixtures/node/token.json"),
+        )
+        .await;
 
         let (tx, mut rx) = mpsc::channel(64);
         let id = SourceId("node-a".into());
-        let handle = tokio::spawn(run_node(id.clone(), NodeClient::new(http_client(), &s.uri()), fast(), tx));
+        let handle = tokio::spawn(run_node(
+            id.clone(),
+            NodeClient::new(http_client(), &s.uri()),
+            fast(),
+            tx,
+        ));
         let events = collect(&mut rx, vec!["status", "info", "mempool", "block", "token"]).await;
         handle.abort();
 
         let mempool = events.iter().find_map(|e| match e {
-            SourceEvent::Mempool { source, ids, new_txs, .. } => Some((source, ids, new_txs)),
+            SourceEvent::Mempool {
+                source,
+                ids,
+                new_txs,
+                ..
+            } => Some((source, ids, new_txs)),
             _ => None,
         });
         let (source, ids, new_txs) = mempool.unwrap();
         assert_eq!(source, &id);
         assert_eq!(ids, &vec!["tx-a".to_string(), "tx-b".to_string()]);
         assert_eq!(new_txs.len(), 2);
-        assert!(events.iter().any(|e| matches!(e, SourceEvent::Status { status: SourceStatus::Up, .. })));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            SourceEvent::Status {
+                status: SourceStatus::Up,
+                ..
+            }
+        )));
     }
 
     #[tokio::test]
@@ -342,19 +550,58 @@ mod tests {
         let handle = tokio::spawn(run_node(SourceId("dead".into()), client, fast(), tx));
         let events = collect(&mut rx, vec!["status"]).await;
         handle.abort();
-        assert!(matches!(&events[0], SourceEvent::Status { status: SourceStatus::Down(_), .. }));
+        assert!(matches!(
+            &events[0],
+            SourceEvent::Status {
+                status: SourceStatus::Down(_),
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
     async fn explorer_loop_emits_mempool_once_per_new_tx_and_blocks() {
         let s = MockServer::start().await;
-        mock(&s, "GET", "/transactions/unconfirmed", 200, include_str!("../../tests/fixtures/explorer/unconfirmed.json")).await;
-        mock(&s, "GET", "/api/v1/blocks", 200, include_str!("../../tests/fixtures/explorer/blocks.json")).await;
-        mock(&s, "GET", "/api/v1/blocks/blk-1", 200, include_str!("../../tests/fixtures/explorer/block.json")).await;
-        mock(&s, "GET", "/api/v1/blocks/blk-2", 200, include_str!("../../tests/fixtures/explorer/block.json")).await;
+        mock(
+            &s,
+            "GET",
+            "/transactions/unconfirmed",
+            200,
+            include_str!("../../tests/fixtures/explorer/unconfirmed.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/api/v1/blocks",
+            200,
+            include_str!("../../tests/fixtures/explorer/blocks.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/api/v1/blocks/blk-1",
+            200,
+            include_str!("../../tests/fixtures/explorer/block.json"),
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/api/v1/blocks/blk-2",
+            200,
+            include_str!("../../tests/fixtures/explorer/block.json"),
+        )
+        .await;
 
         let (tx, mut rx) = mpsc::channel(64);
-        let handle = tokio::spawn(run_explorer(SourceId("p2p".into()), ExplorerClient::new(http_client(), &s.uri()), fast(), tx));
+        let handle = tokio::spawn(run_explorer(
+            SourceId("p2p".into()),
+            ExplorerClient::new(http_client(), &s.uri()),
+            fast(),
+            tx,
+        ));
         let first = collect(&mut rx, vec!["mempool", "block"]).await;
         let second = collect(&mut rx, vec!["mempool"]).await;
         handle.abort();
@@ -367,7 +614,11 @@ mod tests {
             })
             .collect();
         assert_eq!(new_counts[0], 1);
-        assert_eq!(*new_counts.last().unwrap(), 0, "already-sent bodies are not resent");
+        assert_eq!(
+            *new_counts.last().unwrap(),
+            0,
+            "already-sent bodies are not resent"
+        );
     }
 
     #[tokio::test]
@@ -375,10 +626,17 @@ mod tests {
         let s = MockServer::start().await;
         let body = r#"{"items":[{"address":"9f","name":"X","type":"Exchange"}],"total":1}"#;
         mock(&s, "GET", "/addressbook/getAddresses", 200, body).await;
-        let cache = std::env::temp_dir().join(format!("ergotop-rt-{}", std::process::id())).join("addressbook.json");
+        let cache = std::env::temp_dir()
+            .join(format!("ergotop-rt-{}", std::process::id()))
+            .join("addressbook.json");
         let _ = std::fs::remove_file(&cache);
         let (tx, mut rx) = mpsc::channel(8);
-        let handle = tokio::spawn(run_address_book(http_client(), s.uri(), Some(cache.clone()), tx));
+        let handle = tokio::spawn(run_address_book(
+            http_client(),
+            s.uri(),
+            Some(cache.clone()),
+            tx,
+        ));
         let first = collect(&mut rx, vec!["book"]).await;
         let second = collect(&mut rx, vec!["book"]).await;
         handle.abort();

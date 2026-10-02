@@ -1,12 +1,14 @@
 //! Ergo Explorer API client (public and p2p instances share the API).
 use serde::Deserialize;
 
-use super::{get_json, Result};
+use super::{get_json, Result, SourceError};
 use crate::model::{find_miner_reward, Block, BlockRef, BoxData, Input, Token, Tx};
 
 #[derive(Deserialize)]
 struct Page<T> {
     items: Vec<T>,
+    #[serde(default)]
+    total: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -85,12 +87,18 @@ fn to_tx(t: TxJson) -> Tx {
             .into_iter()
             .map(|i| {
                 let resolved = match (i.value, i.address) {
-                    (Some(value), Some(address)) => {
-                        Some(BoxData { box_id: i.id.clone(), value, address, tokens: vec![] })
-                    }
+                    (Some(value), Some(address)) => Some(BoxData {
+                        box_id: i.id.clone(),
+                        value,
+                        address,
+                        tokens: vec![],
+                    }),
                     _ => None,
                 };
-                Input { box_id: i.id, resolved }
+                Input {
+                    box_id: i.id,
+                    resolved,
+                }
             })
             .collect(),
         outputs: t
@@ -103,7 +111,10 @@ fn to_tx(t: TxJson) -> Tx {
                 tokens: o
                     .assets
                     .into_iter()
-                    .map(|a| Token { token_id: a.token_id, amount: a.amount })
+                    .map(|a| Token {
+                        token_id: a.token_id,
+                        amount: a.amount,
+                    })
                     .collect(),
             })
             .collect(),
@@ -118,12 +129,24 @@ pub struct ExplorerClient {
 
 impl ExplorerClient {
     pub fn new(http: reqwest::Client, base: &str) -> Self {
-        Self { http, base: base.trim_end_matches('/').to_string() }
+        Self {
+            http,
+            base: base.trim_end_matches('/').to_string(),
+        }
     }
 
     pub async fn mempool(&self) -> Result<Vec<Tx>> {
-        let url = format!("{}/transactions/unconfirmed?limit=10000&offset=0", self.base);
+        let url = format!(
+            "{}/transactions/unconfirmed?limit=10000&offset=0",
+            self.base
+        );
         let page: Page<TxJson> = get_json(&self.http, &url).await?;
+        let total = page.total.unwrap_or(0);
+        if page.items.is_empty() && total > 0 {
+            return Err(SourceError::Parse(format!(
+                "explorer reported {total} unconfirmed txs but returned none"
+            )));
+        }
         Ok(page.items.into_iter().map(to_tx).collect())
     }
 
@@ -133,12 +156,17 @@ impl ExplorerClient {
         Ok(page
             .items
             .into_iter()
-            .map(|b| BlockRef { id: b.id, height: b.height, timestamp_ms: b.timestamp })
+            .map(|b| BlockRef {
+                id: b.id,
+                height: b.height,
+                timestamp_ms: b.timestamp,
+            })
             .collect())
     }
 
     pub async fn block(&self, id: &str) -> Result<Block> {
-        let b: BlockJson = get_json(&self.http, &format!("{}/api/v1/blocks/{id}", self.base)).await?;
+        let b: BlockJson =
+            get_json(&self.http, &format!("{}/api/v1/blocks/{id}", self.base)).await?;
         let txs: Vec<Tx> = b.block.block_transactions.into_iter().map(to_tx).collect();
         let reward = txs.first().and_then(|t| find_miner_reward(&t.outputs));
         let h = b.block.header;
@@ -177,14 +205,20 @@ mod tests {
     async fn parses_mempool() {
         let s = MockServer::start().await;
         mock(&s, "/transactions/unconfirmed", 200, UNCONFIRMED).await;
-        let txs = ExplorerClient::new(http_client(), &s.uri()).mempool().await.unwrap();
+        let txs = ExplorerClient::new(http_client(), &s.uri())
+            .mempool()
+            .await
+            .unwrap();
         assert_eq!(txs.len(), 1);
         let t = &txs[0];
         assert_eq!(t.id, "e1");
         assert_eq!(t.size, 412);
         assert_eq!(t.creation_ts_ms, Some(1790978000000));
         let input = t.inputs[0].resolved.as_ref().unwrap();
-        assert_eq!(input.address, "9fyeEQBXvJzRYpRmrNy2eaB2kDqQGDk3KoSQGUB62db3tVDw2Z1");
+        assert_eq!(
+            input.address,
+            "9fyeEQBXvJzRYpRmrNy2eaB2kDqQGDk3KoSQGUB62db3tVDw2Z1"
+        );
         assert_eq!(input.value, 11889000000);
         assert_eq!(t.outputs[0].address, "4MQyMKvMbnCJG3aJ");
         assert_eq!(t.outputs[0].tokens[0].amount, 5);
@@ -199,7 +233,14 @@ mod tests {
         mock(&s, "/api/v1/blocks/blk-2", 200, BLOCK).await;
         let c = ExplorerClient::new(http_client(), &s.uri());
         let refs = c.latest_blocks(2).await.unwrap();
-        assert_eq!(refs[0], BlockRef { id: "blk-2".into(), height: 1886101, timestamp_ms: 1790978083213 });
+        assert_eq!(
+            refs[0],
+            BlockRef {
+                id: "blk-2".into(),
+                height: 1886101,
+                timestamp_ms: 1790978083213
+            }
+        );
         let b = c.block("blk-2").await.unwrap();
         assert_eq!(b.tx_ids, vec!["cb-1", "e1"]);
         assert_eq!(b.size, 187236);
@@ -211,7 +252,47 @@ mod tests {
     async fn http_error_is_reported() {
         let s = MockServer::start().await;
         mock(&s, "/transactions/unconfirmed", 503, "").await;
-        let err = ExplorerClient::new(http_client(), &s.uri()).mempool().await.unwrap_err();
+        let err = ExplorerClient::new(http_client(), &s.uri())
+            .mempool()
+            .await
+            .unwrap_err();
         assert!(matches!(err, crate::sources::SourceError::Status(503)));
+    }
+
+    #[tokio::test]
+    async fn items_missing_despite_total_is_an_error() {
+        let s = MockServer::start().await;
+        mock(
+            &s,
+            "/transactions/unconfirmed",
+            200,
+            r#"{"items":[],"total":70}"#,
+        )
+        .await;
+        let err = ExplorerClient::new(http_client(), &s.uri())
+            .mempool()
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::sources::SourceError::Parse(_)),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn genuinely_empty_mempool_is_ok() {
+        let s = MockServer::start().await;
+        mock(
+            &s,
+            "/transactions/unconfirmed",
+            200,
+            r#"{"items":[],"total":0}"#,
+        )
+        .await;
+        let txs = ExplorerClient::new(http_client(), &s.uri())
+            .mempool()
+            .await
+            .unwrap();
+        assert!(txs.is_empty());
     }
 }

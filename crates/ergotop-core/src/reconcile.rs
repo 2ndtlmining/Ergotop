@@ -10,6 +10,9 @@ use crate::sources::SourceEvent;
 pub const DROP_GRACE_POLLS: u8 = 2;
 const RECENT_BLOCKS: usize = 10;
 const EMPTY_GUARD_MIN: usize = 5;
+/// Public explorers are load-balanced and their snapshots flap; with an explorer active, a tx
+/// must be missing from every usable explorer for this many active polls before it leaves the pool.
+const EXPLORER_MISSING_POLLS: u8 = 3;
 
 #[derive(Clone, Debug)]
 pub struct TxEntry {
@@ -34,7 +37,10 @@ pub struct SourceView {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Update {
     Added(Vec<TxId>),
-    Mined { height: u32, tx_ids: Vec<TxId> },
+    Mined {
+        height: u32,
+        tx_ids: Vec<TxId>,
+    },
     Dropped(Vec<TxId>),
     /// The pool was rebuilt (startup or failover); redraw without per-tx animation.
     Resynced,
@@ -49,6 +55,7 @@ pub struct Reconciler {
     bodies: HashMap<TxId, Tx>,
     first_seen: HashMap<TxId, u64>,
     pending: HashMap<TxId, u8>,
+    missing: HashMap<TxId, u8>,
     blocks: VecDeque<Block>,
     empty_strike: bool,
 }
@@ -74,6 +81,7 @@ impl Reconciler {
             bodies: HashMap::new(),
             first_seen: HashMap::new(),
             pending: HashMap::new(),
+            missing: HashMap::new(),
             blocks: VecDeque::new(),
             empty_strike: false,
         }
@@ -93,17 +101,23 @@ impl Reconciler {
 
     pub fn recent_blocks(&self) -> Vec<&Block> {
         let mut v: Vec<&Block> = self.blocks.iter().collect();
-        v.sort_by(|a, b| b.height.cmp(&a.height));
+        v.sort_by_key(|b| std::cmp::Reverse(b.height));
         v
     }
 
     /// Ids that `source` has but no other source has.
     pub fn only_in(&self, source: &SourceId) -> Vec<TxId> {
-        let Some(view) = self.views.iter().find(|v| &v.id == source) else { return vec![] };
+        let Some(view) = self.views.iter().find(|v| &v.id == source) else {
+            return vec![];
+        };
         let mut out: Vec<TxId> = view
             .ids
             .iter()
-            .filter(|id| self.views.iter().all(|o| &o.id == source || !o.ids.contains(*id)))
+            .filter(|id| {
+                self.views
+                    .iter()
+                    .all(|o| &o.id == source || !o.ids.contains(*id))
+            })
             .cloned()
             .collect();
         out.sort();
@@ -119,7 +133,9 @@ impl Reconciler {
     pub fn apply(&mut self, ev: SourceEvent, now_ms: u64, cls: &Classifier) -> Vec<Update> {
         match ev {
             SourceEvent::Status { source, status } => {
-                let Some(v) = self.views.iter_mut().find(|v| v.id == source) else { return vec![] };
+                let Some(v) = self.views.iter_mut().find(|v| v.id == source) else {
+                    return vec![];
+                };
                 if v.status == status {
                     return vec![];
                 }
@@ -128,18 +144,25 @@ impl Reconciler {
                 out.extend(self.reselect_active(cls));
                 out
             }
-            SourceEvent::Info { source, info } => match self.views.iter_mut().find(|v| v.id == source) {
-                Some(v) => {
-                    v.info = Some(info);
-                    vec![Update::SourcesChanged]
+            SourceEvent::Info { source, info } => {
+                match self.views.iter_mut().find(|v| v.id == source) {
+                    Some(v) => {
+                        v.info = Some(info);
+                        vec![Update::SourcesChanged]
+                    }
+                    None => vec![],
                 }
-                None => vec![],
-            },
-            SourceEvent::Mempool { source, ids, new_txs, latency_ms } => {
-                self.on_mempool(source, ids, new_txs, latency_ms, now_ms, cls)
             }
+            SourceEvent::Mempool {
+                source,
+                ids,
+                new_txs,
+                latency_ms,
+            } => self.on_mempool(source, ids, new_txs, latency_ms, now_ms, cls),
             SourceEvent::Block { block, .. } => self.on_block(block),
-            SourceEvent::Price(_) | SourceEvent::AddressBook(_) | SourceEvent::TokenMeta(_) => vec![],
+            SourceEvent::Price(_) | SourceEvent::AddressBook(_) | SourceEvent::TokenMeta(_) => {
+                vec![]
+            }
         }
     }
 
@@ -152,7 +175,9 @@ impl Reconciler {
         now_ms: u64,
         cls: &Classifier,
     ) -> Vec<Update> {
-        let Some(idx) = self.views.iter().position(|v| v.id == source) else { return vec![] };
+        let Some(idx) = self.views.iter().position(|v| v.id == source) else {
+            return vec![];
+        };
         for id in &ids {
             self.first_seen.entry(id.clone()).or_insert(now_ms);
         }
@@ -216,6 +241,7 @@ impl Reconciler {
 
     fn resync(&mut self, cls: &Classifier) {
         self.pending.clear();
+        self.missing.clear();
         self.empty_strike = false;
         let Some(idx) = self.active_idx() else {
             self.pool.clear();
@@ -239,9 +265,15 @@ impl Reconciler {
                 .filter(|id| !self.pool.contains_key(*id) && self.bodies.contains_key(*id))
                 .cloned()
                 .collect();
-            let removed = self.pool.keys().filter(|id| !active_ids.contains(*id)).cloned().collect();
+            let removed = self
+                .pool
+                .keys()
+                .filter(|id| !active_ids.contains(*id))
+                .cloned()
+                .collect();
             (added, removed)
         };
+        let removed = self.confirm_absent(idx, removed);
         for id in &added {
             self.pending.remove(id);
             let entry = self.make_entry(self.bodies[id].clone(), cls);
@@ -286,6 +318,38 @@ impl Reconciler {
         out
     }
 
+    /// Filters `candidates` (pool txs missing from the active snapshot) down to those that
+    /// really left: all of them for a node; for an explorer, those in a known block or missing
+    /// from every usable explorer for `EXPLORER_MISSING_POLLS` consecutive active polls.
+    fn confirm_absent(&mut self, idx: usize, candidates: Vec<TxId>) -> Vec<TxId> {
+        let active_ids = &self.views[idx].ids;
+        self.missing.retain(|id, _| !active_ids.contains(id));
+        if self.views[idx].kind == SourceKind::Node {
+            self.missing.clear();
+            return candidates;
+        }
+        let mut gone = Vec::new();
+        for id in candidates {
+            let listed_elsewhere = self.views.iter().any(|v| {
+                v.kind == SourceKind::Explorer && v.status.usable() && v.ids.contains(&id)
+            });
+            if self.block_height_of(&id).is_some() {
+                self.missing.remove(&id);
+                gone.push(id);
+            } else if listed_elsewhere {
+                self.missing.remove(&id);
+            } else {
+                let n = self.missing.entry(id.clone()).or_insert(0);
+                *n += 1;
+                if *n >= EXPLORER_MISSING_POLLS {
+                    self.missing.remove(&id);
+                    gone.push(id);
+                }
+            }
+        }
+        gone
+    }
+
     fn on_block(&mut self, block: Block) -> Vec<Update> {
         if self.blocks.iter().any(|b| b.id == block.id) {
             return vec![];
@@ -305,7 +369,10 @@ impl Reconciler {
         let mut out = vec![Update::BlockAdded(height)];
         if !mined.is_empty() {
             mined.sort();
-            out.push(Update::Mined { height, tx_ids: mined });
+            out.push(Update::Mined {
+                height,
+                tx_ids: mined,
+            });
         }
         out
     }
@@ -316,7 +383,10 @@ impl Reconciler {
     }
 
     fn block_height_of(&self, id: &TxId) -> Option<u32> {
-        self.blocks.iter().find(|b| b.tx_ids.contains(id)).map(|b| b.height)
+        self.blocks
+            .iter()
+            .find(|b| b.tx_ids.contains(id))
+            .map(|b| b.height)
     }
 
     fn make_entry(&self, tx: Tx, cls: &Classifier) -> TxEntry {
@@ -340,8 +410,11 @@ impl Reconciler {
         let views = &self.views;
         let pool = &self.pool;
         let pending = &self.pending;
-        let keep =
-            |id: &TxId| pool.contains_key(id) || pending.contains_key(id) || views.iter().any(|v| v.ids.contains(id));
+        let keep = |id: &TxId| {
+            pool.contains_key(id)
+                || pending.contains_key(id)
+                || views.iter().any(|v| v.ids.contains(id))
+        };
         self.bodies.retain(|id, _| keep(id));
         self.first_seen.retain(|id, _| keep(id));
     }
@@ -365,7 +438,10 @@ mod tests {
         Classifier::new(&Builtin::default(), &[], &[])
     }
     fn rec() -> Reconciler {
-        Reconciler::new(vec![(node(), SourceKind::Node), (expl(), SourceKind::Explorer)])
+        Reconciler::new(vec![
+            (node(), SourceKind::Node),
+            (expl(), SourceKind::Explorer),
+        ])
     }
     fn t(id: &str) -> Tx {
         tx(id, 100, vec![bx(W, 10)], vec![bx(W, 9)])
@@ -412,9 +488,18 @@ mod tests {
     fn removal_after_block_is_mined() {
         let (mut r, c) = (rec(), cls());
         r.apply(mempool(node(), &["a", "b"], &["a", "b"]), 1, &c);
-        assert_eq!(r.apply(block("h1", 100, &["a"]), 2, &c), vec![Update::BlockAdded(100)]);
+        assert_eq!(
+            r.apply(block("h1", 100, &["a"]), 2, &c),
+            vec![Update::BlockAdded(100)]
+        );
         let u = r.apply(mempool(node(), &["b"], &[]), 3, &c);
-        assert_eq!(u, vec![Update::Mined { height: 100, tx_ids: ids(&["a"]) }]);
+        assert_eq!(
+            u,
+            vec![Update::Mined {
+                height: 100,
+                tx_ids: ids(&["a"])
+            }]
+        );
     }
 
     #[test]
@@ -423,7 +508,16 @@ mod tests {
         r.apply(mempool(node(), &["a", "b"], &["a", "b"]), 1, &c);
         assert_eq!(r.apply(mempool(node(), &["b"], &[]), 2, &c), vec![]);
         let u = r.apply(block("h1", 100, &["a"]), 3, &c);
-        assert_eq!(u, vec![Update::BlockAdded(100), Update::Mined { height: 100, tx_ids: ids(&["a"]) }]);
+        assert_eq!(
+            u,
+            vec![
+                Update::BlockAdded(100),
+                Update::Mined {
+                    height: 100,
+                    tx_ids: ids(&["a"])
+                }
+            ]
+        );
     }
 
     #[test]
@@ -432,7 +526,10 @@ mod tests {
         r.apply(mempool(node(), &["a", "b"], &["a", "b"]), 1, &c);
         assert_eq!(r.apply(mempool(node(), &["b"], &[]), 2, &c), vec![]);
         assert_eq!(r.apply(mempool(node(), &["b"], &[]), 3, &c), vec![]);
-        assert_eq!(r.apply(mempool(node(), &["b"], &[]), 4, &c), vec![Update::Dropped(ids(&["a"]))]);
+        assert_eq!(
+            r.apply(mempool(node(), &["b"], &[]), 4, &c),
+            vec![Update::Dropped(ids(&["a"]))]
+        );
     }
 
     #[test]
@@ -460,7 +557,14 @@ mod tests {
         r.apply(mempool(node(), &["a", "b"], &["a", "b"]), 1, &c);
         r.apply(mempool(expl(), &["b", "c"], &["b", "c"]), 2, &c);
         assert_eq!(r.active(), Some(&node()));
-        let u = r.apply(SourceEvent::Status { source: node(), status: SourceStatus::Down("timeout".into()) }, 3, &c);
+        let u = r.apply(
+            SourceEvent::Status {
+                source: node(),
+                status: SourceStatus::Down("timeout".into()),
+            },
+            3,
+            &c,
+        );
         assert_eq!(u, vec![Update::SourcesChanged, Update::Resynced]);
         assert_eq!(r.active(), Some(&expl()));
         let mut pool: Vec<&String> = r.pool().keys().collect();
@@ -495,8 +599,78 @@ mod tests {
         let (mut r, c) = (rec(), cls());
         r.apply(mempool(node(), &["a"], &["a"]), 1, &c);
         assert_eq!(r.pool()["a"].class.class.name, "P2P");
-        let book = [crate::classify::BookEntry { address: W.into(), name: "Kucoin".into(), kind: crate::classify::Kind::Exchange }];
+        let book = [crate::classify::BookEntry {
+            address: W.into(),
+            name: "Kucoin".into(),
+            kind: crate::classify::Kind::Exchange,
+        }];
         r.reclassify(&Classifier::new(&Builtin::default(), &book, &[]));
         assert_eq!(r.pool()["a"].class.class.name, "Kucoin");
+    }
+
+    fn public() -> SourceId {
+        SourceId("public".into())
+    }
+    fn explorers_only() -> Reconciler {
+        Reconciler::new(vec![
+            (expl(), SourceKind::Explorer),
+            (public(), SourceKind::Explorer),
+        ])
+    }
+
+    #[test]
+    fn explorer_flapping_does_not_drop_or_re_add() {
+        let (mut r, c) = (explorers_only(), cls());
+        r.apply(mempool(expl(), &["a", "b"], &["a", "b"]), 1, &c);
+        assert_eq!(r.apply(mempool(expl(), &["b"], &[]), 2, &c), vec![]);
+        assert_eq!(r.pool().len(), 2, "a stays while only briefly missing");
+        assert_eq!(r.apply(mempool(expl(), &["a", "b"], &[]), 3, &c), vec![]);
+        for now in 4..10 {
+            r.apply(mempool(expl(), &["b"], &[]), now, &c);
+            r.apply(mempool(expl(), &["a", "b"], &[]), now, &c);
+        }
+        assert_eq!(r.pool().len(), 2, "alternating presence never removes a");
+    }
+
+    #[test]
+    fn explorer_tx_missing_three_polls_is_removed_then_dropped() {
+        let (mut r, c) = (explorers_only(), cls());
+        r.apply(mempool(expl(), &["a", "b"], &["a", "b"]), 1, &c);
+        assert_eq!(r.apply(mempool(expl(), &["b"], &[]), 2, &c), vec![]);
+        assert_eq!(r.apply(mempool(expl(), &["b"], &[]), 3, &c), vec![]);
+        assert_eq!(r.apply(mempool(expl(), &["b"], &[]), 4, &c), vec![]);
+        assert!(
+            !r.pool().contains_key("a"),
+            "removed after 3 consecutive misses"
+        );
+        r.apply(mempool(expl(), &["b"], &[]), 5, &c);
+        let u = r.apply(mempool(expl(), &["b"], &[]), 6, &c);
+        assert_eq!(u, vec![Update::Dropped(ids(&["a"]))]);
+    }
+
+    #[test]
+    fn explorer_absence_requires_all_explorers() {
+        let (mut r, c) = (explorers_only(), cls());
+        r.apply(mempool(expl(), &["a", "b"], &["a", "b"]), 1, &c);
+        r.apply(mempool(public(), &["a", "b"], &["a", "b"]), 1, &c);
+        for now in 2..8 {
+            r.apply(mempool(expl(), &["b"], &[]), now, &c);
+        }
+        assert!(r.pool().contains_key("a"), "public still lists a");
+    }
+
+    #[test]
+    fn explorer_mined_tx_is_removed_immediately() {
+        let (mut r, c) = (explorers_only(), cls());
+        r.apply(mempool(expl(), &["a", "b"], &["a", "b"]), 1, &c);
+        r.apply(block("h1", 100, &["a"]), 2, &c);
+        let u = r.apply(mempool(expl(), &["b"], &[]), 3, &c);
+        assert_eq!(
+            u,
+            vec![Update::Mined {
+                height: 100,
+                tx_ids: ids(&["a"])
+            }]
+        );
     }
 }

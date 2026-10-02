@@ -5,7 +5,9 @@ use serde::Deserialize;
 
 use super::{get_json, post_json, Result};
 use crate::ergotree::tree_to_address;
-use crate::model::{find_miner_reward, Block, BlockRef, BoxData, Input, NodeInfo, Token, TokenMeta, Tx, TxId};
+use crate::model::{
+    find_miner_reward, Block, BlockRef, BoxData, Input, NodeInfo, Token, TokenMeta, Tx, TxId,
+};
 
 const BOX_CHUNK: usize = 100;
 
@@ -99,7 +101,10 @@ fn to_box(o: OutputJson) -> BoxData {
         tokens: o
             .assets
             .into_iter()
-            .map(|a| Token { token_id: a.token_id, amount: a.amount })
+            .map(|a| Token {
+                token_id: a.token_id,
+                amount: a.amount,
+            })
             .collect(),
     }
 }
@@ -111,7 +116,10 @@ fn to_tx(t: TxJson, resolved: &HashMap<String, BoxData>) -> Tx {
         inputs: t
             .inputs
             .into_iter()
-            .map(|i| Input { resolved: resolved.get(&i.box_id).cloned(), box_id: i.box_id })
+            .map(|i| Input {
+                resolved: resolved.get(&i.box_id).cloned(),
+                box_id: i.box_id,
+            })
             .collect(),
         outputs: t.outputs.into_iter().map(to_box).collect(),
         creation_ts_ms: None,
@@ -125,7 +133,10 @@ pub struct NodeClient {
 
 impl NodeClient {
     pub fn new(http: reqwest::Client, base: &str) -> Self {
-        Self { http, base: base.trim_end_matches('/').to_string() }
+        Self {
+            http,
+            base: base.trim_end_matches('/').to_string(),
+        }
     }
 
     fn url(&self, p: &str) -> String {
@@ -134,10 +145,11 @@ impl NodeClient {
 
     pub async fn info(&self) -> Result<NodeInfo> {
         let i: InfoJson = get_json(&self.http, &self.url("/info")).await?;
-        let indexed_height = get_json::<IndexedHeightJson>(&self.http, &self.url("/blockchain/indexedHeight"))
-            .await
-            .ok()
-            .map(|h| h.indexed_height);
+        let indexed_height =
+            get_json::<IndexedHeightJson>(&self.http, &self.url("/blockchain/indexedHeight"))
+                .await
+                .ok()
+                .map(|h| h.indexed_height);
         Ok(NodeInfo {
             full_height: i.full_height.unwrap_or(0),
             headers_height: i.headers_height.unwrap_or(0),
@@ -149,28 +161,40 @@ impl NodeClient {
     }
 
     pub async fn mempool_ids(&self) -> Result<Vec<TxId>> {
-        get_json(&self.http, &self.url("/transactions/unconfirmed/transactionIds")).await
+        get_json(
+            &self.http,
+            &self.url("/transactions/unconfirmed/transactionIds"),
+        )
+        .await
     }
 
     pub async fn mempool_txs(&self, ids: &[TxId]) -> Result<Vec<Tx>> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
-        let raw: Vec<TxJson> =
-            match post_json(&self.http, &self.url("/transactions/unconfirmed/byTransactionIds"), ids).await {
-                Ok(v) => v,
-                Err(_) => {
-                    let mut v = Vec::new();
-                    for id in ids {
-                        let url = self.url(&format!("/transactions/unconfirmed/byTransactionId/{id}"));
-                        if let Ok(t) = get_json::<TxJson>(&self.http, &url).await {
-                            v.push(t);
-                        }
+        let raw: Vec<TxJson> = match post_json(
+            &self.http,
+            &self.url("/transactions/unconfirmed/byTransactionIds"),
+            ids,
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(_) => {
+                let mut v = Vec::new();
+                for id in ids {
+                    let url = self.url(&format!("/transactions/unconfirmed/byTransactionId/{id}"));
+                    if let Ok(t) = get_json::<TxJson>(&self.http, &url).await {
+                        v.push(t);
                     }
-                    v
                 }
-            };
-        let box_ids: Vec<String> = raw.iter().flat_map(|t| t.inputs.iter().map(|i| i.box_id.clone())).collect();
+                v
+            }
+        };
+        let box_ids: Vec<String> = raw
+            .iter()
+            .flat_map(|t| t.inputs.iter().map(|i| i.box_id.clone()))
+            .collect();
         let resolved = self.boxes(&box_ids).await;
         Ok(raw.into_iter().map(|t| to_tx(t, &resolved)).collect())
     }
@@ -179,7 +203,13 @@ impl NodeClient {
     async fn boxes(&self, ids: &[String]) -> HashMap<String, BoxData> {
         let mut out = HashMap::new();
         for chunk in ids.chunks(BOX_CHUNK) {
-            if let Ok(found) = post_json::<_, Vec<OutputJson>>(&self.http, &self.url("/utxo/withPool/byIds"), chunk).await {
+            if let Ok(found) = post_json::<_, Vec<OutputJson>>(
+                &self.http,
+                &self.url("/utxo/withPool/byIds"),
+                chunk,
+            )
+            .await
+            {
                 for o in found {
                     let b = to_box(o);
                     out.insert(b.box_id.clone(), b);
@@ -190,17 +220,30 @@ impl NodeClient {
     }
 
     pub async fn last_headers(&self, n: u32) -> Result<Vec<BlockRef>> {
-        let hs: Vec<HeaderJson> = get_json(&self.http, &self.url(&format!("/blocks/lastHeaders/{n}"))).await?;
+        let hs: Vec<HeaderJson> =
+            get_json(&self.http, &self.url(&format!("/blocks/lastHeaders/{n}"))).await?;
         Ok(hs
             .into_iter()
-            .map(|h| BlockRef { id: h.id, height: h.height, timestamp_ms: h.timestamp })
+            .map(|h| BlockRef {
+                id: h.id,
+                height: h.height,
+                timestamp_ms: h.timestamp,
+            })
             .collect())
     }
 
     pub async fn block(&self, header: &BlockRef) -> Result<Block> {
-        let b: BlockTxsJson = get_json(&self.http, &self.url(&format!("/blocks/{}/transactions", header.id))).await?;
+        let b: BlockTxsJson = get_json(
+            &self.http,
+            &self.url(&format!("/blocks/{}/transactions", header.id)),
+        )
+        .await?;
         let empty = HashMap::new();
-        let txs: Vec<Tx> = b.transactions.into_iter().map(|t| to_tx(t, &empty)).collect();
+        let txs: Vec<Tx> = b
+            .transactions
+            .into_iter()
+            .map(|t| to_tx(t, &empty))
+            .collect();
         let reward = txs.first().and_then(|t| find_miner_reward(&t.outputs));
         Ok(Block {
             id: header.id.clone(),
@@ -214,8 +257,16 @@ impl NodeClient {
     }
 
     pub async fn token(&self, token_id: &str) -> Result<TokenMeta> {
-        let t: TokenJson = get_json(&self.http, &self.url(&format!("/blockchain/token/byId/{token_id}"))).await?;
-        Ok(TokenMeta { token_id: t.id, name: t.name, decimals: t.decimals.unwrap_or(0) })
+        let t: TokenJson = get_json(
+            &self.http,
+            &self.url(&format!("/blockchain/token/byId/{token_id}")),
+        )
+        .await?;
+        Ok(TokenMeta {
+            token_id: t.id,
+            name: t.name,
+            decimals: t.decimals.unwrap_or(0),
+        })
     }
 }
 
@@ -250,7 +301,10 @@ mod tests {
         let s = MockServer::start().await;
         mock(&s, "GET", "/info", 200, INFO).await;
         mock(&s, "GET", "/blockchain/indexedHeight", 200, INDEXED).await;
-        let info = NodeClient::new(http_client(), &s.uri()).info().await.unwrap();
+        let info = NodeClient::new(http_client(), &s.uri())
+            .info()
+            .await
+            .unwrap();
         assert_eq!(info.full_height, 1886101);
         assert_eq!(info.max_block_size, 1271009);
         assert_eq!(info.peers, 31);
@@ -263,15 +317,32 @@ mod tests {
         let s = MockServer::start().await;
         mock(&s, "GET", "/info", 200, INFO).await;
         mock(&s, "GET", "/blockchain/indexedHeight", 404, "{}").await;
-        let info = NodeClient::new(http_client(), &s.uri()).info().await.unwrap();
+        let info = NodeClient::new(http_client(), &s.uri())
+            .info()
+            .await
+            .unwrap();
         assert_eq!(info.indexed_height, None);
     }
 
     #[tokio::test]
     async fn mempool_txs_resolve_inputs_and_addresses() {
         let s = MockServer::start().await;
-        mock(&s, "GET", "/transactions/unconfirmed/transactionIds", 200, IDS).await;
-        mock(&s, "POST", "/transactions/unconfirmed/byTransactionIds", 200, TXS).await;
+        mock(
+            &s,
+            "GET",
+            "/transactions/unconfirmed/transactionIds",
+            200,
+            IDS,
+        )
+        .await;
+        mock(
+            &s,
+            "POST",
+            "/transactions/unconfirmed/byTransactionIds",
+            200,
+            TXS,
+        )
+        .await;
         mock(&s, "POST", "/utxo/withPool/byIds", 200, BOXES).await;
         let c = NodeClient::new(http_client(), &s.uri());
         let ids = c.mempool_ids().await.unwrap();
@@ -280,14 +351,20 @@ mod tests {
         assert_eq!(txs.len(), 2);
         let a = &txs[0];
         assert_eq!(a.size, 412);
-        assert_eq!(a.outputs[0].address, "9guaDYhHCxtfAdRTKr8xXaDuXtdB8gdGB7WwnB5zTBw93Ym3Rsq");
+        assert_eq!(
+            a.outputs[0].address,
+            "9guaDYhHCxtfAdRTKr8xXaDuXtdB8gdGB7WwnB5zTBw93Ym3Rsq"
+        );
         assert_eq!(a.outputs[1].address, crate::metrics::FEE_ADDRESS);
         assert_eq!(a.outputs[0].tokens[0].token_id, "tok-1");
         let resolved = a.inputs[0].resolved.as_ref().expect("input resolved");
         assert_eq!(resolved.value, 11889000000);
         assert_eq!(
             resolved.address,
-            tree_to_address("0008cd021111111111111111111111111111111111111111111111111111111111111111").unwrap()
+            tree_to_address(
+                "0008cd021111111111111111111111111111111111111111111111111111111111111111"
+            )
+            .unwrap()
         );
         assert_eq!(txs[1].outputs[0].address, "4MQyMKvMbnCJG3aJ");
     }
@@ -295,14 +372,31 @@ mod tests {
     #[tokio::test]
     async fn mempool_txs_fall_back_to_single_gets() {
         let s = MockServer::start().await;
-        mock(&s, "POST", "/transactions/unconfirmed/byTransactionIds", 500, "").await;
-        mock(&s, "GET", "/transactions/unconfirmed/byTransactionId/tx-a", 200, TX_A).await;
+        mock(
+            &s,
+            "POST",
+            "/transactions/unconfirmed/byTransactionIds",
+            500,
+            "",
+        )
+        .await;
+        mock(
+            &s,
+            "GET",
+            "/transactions/unconfirmed/byTransactionId/tx-a",
+            200,
+            TX_A,
+        )
+        .await;
         mock(&s, "POST", "/utxo/withPool/byIds", 404, "{}").await;
         let c = NodeClient::new(http_client(), &s.uri());
         let txs = c.mempool_txs(&["tx-a".to_string()]).await.unwrap();
         assert_eq!(txs.len(), 1);
         assert_eq!(txs[0].id, "tx-a");
-        assert!(txs[0].inputs[0].resolved.is_none(), "box lookup failed, input left unresolved");
+        assert!(
+            txs[0].inputs[0].resolved.is_none(),
+            "box lookup failed, input left unresolved"
+        );
     }
 
     #[tokio::test]
@@ -318,14 +412,23 @@ mod tests {
         mock(&s, "GET", "/blocks/hdr-1/transactions", 200, BLOCK).await;
         let c = NodeClient::new(http_client(), &s.uri());
         let headers = c.last_headers(2).await.unwrap();
-        assert_eq!(headers[1], BlockRef { id: "hdr-1".into(), height: 1886101, timestamp_ms: 1790978083213 });
+        assert_eq!(
+            headers[1],
+            BlockRef {
+                id: "hdr-1".into(),
+                height: 1886101,
+                timestamp_ms: 1790978083213
+            }
+        );
         let b = c.block(&headers[1]).await.unwrap();
         assert_eq!(b.height, 1886101);
         assert_eq!(b.size, 187236);
         assert_eq!(b.tx_ids, vec!["cb-1", "tx-a"]);
         assert_eq!(
             b.miner_address.as_deref(),
-            Some("88dhgzEuTXaRQTX5KNdnaWTTX7fEZVEQRn6qP4MJotPuRnS3QpoJxYpSaXoU1y7SHp8ZXMp92TH22DBY")
+            Some(
+                "88dhgzEuTXaRQTX5KNdnaWTTX7fEZVEQRn6qP4MJotPuRnS3QpoJxYpSaXoU1y7SHp8ZXMp92TH22DBY"
+            )
         );
         assert_eq!(b.miner_reward, 12000000000);
     }
@@ -334,7 +437,17 @@ mod tests {
     async fn token_meta() {
         let s = MockServer::start().await;
         mock(&s, "GET", "/blockchain/token/byId/tok-1", 200, TOKEN).await;
-        let t = NodeClient::new(http_client(), &s.uri()).token("tok-1").await.unwrap();
-        assert_eq!(t, TokenMeta { token_id: "tok-1".into(), name: Some("SigUSD".into()), decimals: 2 });
+        let t = NodeClient::new(http_client(), &s.uri())
+            .token("tok-1")
+            .await
+            .unwrap();
+        assert_eq!(
+            t,
+            TokenMeta {
+                token_id: "tok-1".into(),
+                name: Some("SigUSD".into()),
+                decimals: 2
+            }
+        );
     }
 }

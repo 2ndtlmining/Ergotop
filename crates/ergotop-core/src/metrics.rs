@@ -54,7 +54,12 @@ mod tests {
 
     #[test]
     fn fee_is_sum_of_fee_outputs() {
-        let t = tx("a", 300, vec![bx(ALICE, 10)], vec![bx(BOB, 5), bx(FEE_ADDRESS, 2), bx(FEE_ADDRESS, 1)]);
+        let t = tx(
+            "a",
+            300,
+            vec![bx(ALICE, 10)],
+            vec![bx(BOB, 5), bx(FEE_ADDRESS, 2), bx(FEE_ADDRESS, 1)],
+        );
         assert_eq!(tx_metrics(&t).fee, 3);
     }
 
@@ -72,13 +77,35 @@ mod tests {
             vec![bx(ALICE, 100)],
             vec![bx(BOB, 40), bx(ALICE, 59), bx(FEE_ADDRESS, 1)],
         );
-        assert_eq!(tx_metrics(&t), TxMetrics { fee: 1, value: 40, approx: false });
+        assert_eq!(
+            tx_metrics(&t),
+            TxMetrics {
+                fee: 1,
+                value: 40,
+                approx: false
+            }
+        );
     }
 
     #[test]
     fn unresolved_inputs_give_approx_value() {
-        let mut t = tx("a", 300, vec![], vec![bx(BOB, 40), bx(ALICE, 59), bx(FEE_ADDRESS, 1)]);
-        t.inputs.push(Input { box_id: "x".into(), resolved: None });
-        assert_eq!(tx_metrics(&t), TxMetrics { fee: 1, value: 99, approx: true });
+        let mut t = tx(
+            "a",
+            300,
+            vec![],
+            vec![bx(BOB, 40), bx(ALICE, 59), bx(FEE_ADDRESS, 1)],
+        );
+        t.inputs.push(Input {
+            box_id: "x".into(),
+            resolved: None,
+        });
+        assert_eq!(
+            tx_metrics(&t),
+            TxMetrics {
+                fee: 1,
+                value: 99,
+                approx: true
+            }
+        );
     }
 }

@@ -141,7 +141,14 @@ impl Classifier {
             exact.insert(a.address.clone(), local_entry(a, Kind::Service));
         }
         for b in book {
-            exact.insert(b.address.clone(), Entry { name: b.name.clone(), kind: b.kind, color: None });
+            exact.insert(
+                b.address.clone(),
+                Entry {
+                    name: b.name.clone(),
+                    kind: b.kind,
+                    color: None,
+                },
+            );
         }
         for a in local {
             exact.insert(a.address.clone(), local_entry(a, Kind::Local));
@@ -150,7 +157,14 @@ impl Classifier {
             .rules
             .iter()
             .map(|r| {
-                (r.address_prefix.clone(), Entry { name: r.name.clone(), kind: Kind::parse(&r.kind), color: None })
+                (
+                    r.address_prefix.clone(),
+                    Entry {
+                        name: r.name.clone(),
+                        kind: Kind::parse(&r.kind),
+                        color: None,
+                    },
+                )
             })
             .collect();
         let colors = builtin
@@ -158,7 +172,11 @@ impl Classifier {
             .iter()
             .filter_map(|(name, hex)| Rgb::parse_hex(hex).map(|c| (name.clone(), c)))
             .collect();
-        Classifier { exact, rules, colors }
+        Classifier {
+            exact,
+            rules,
+            colors,
+        }
     }
 
     fn finish(&self, e: &Entry) -> Classification {
@@ -166,7 +184,11 @@ impl Classifier {
             .color
             .or_else(|| self.colors.get(&e.name).copied())
             .unwrap_or_else(|| e.kind.base_color().shift((fnv1a(&e.name) % 81) as i16 - 40));
-        Classification { name: e.name.clone(), kind: e.kind, color }
+        Classification {
+            name: e.name.clone(),
+            kind: e.kind,
+            color,
+        }
     }
 
     pub fn lookup(&self, address: &str) -> Option<Classification> {
@@ -180,7 +202,11 @@ impl Classifier {
     }
 
     pub fn classify_tx(&self, tx: &Tx) -> TxClass {
-        let outs: Vec<&BoxData> = tx.outputs.iter().filter(|o| o.address != FEE_ADDRESS).collect();
+        let outs: Vec<&BoxData> = tx
+            .outputs
+            .iter()
+            .filter(|o| o.address != FEE_ADDRESS)
+            .collect();
         let out_named = outs.iter().find_map(|o| self.lookup(&o.address));
         let in_named = tx
             .inputs
@@ -188,10 +214,22 @@ impl Classifier {
             .filter_map(|i| i.resolved.as_ref())
             .find_map(|b| self.lookup(&b.address));
         match (out_named, in_named) {
-            (Some(o), Some(i)) if o.name != i.name => TxClass { class: o, from: Some(i.name) },
-            (Some(o), _) => TxClass { class: o, from: None },
-            (None, Some(i)) => TxClass { class: i, from: None },
-            (None, None) => TxClass { class: heuristic(&outs), from: None },
+            (Some(o), Some(i)) if o.name != i.name => TxClass {
+                class: o,
+                from: Some(i.name),
+            },
+            (Some(o), _) => TxClass {
+                class: o,
+                from: None,
+            },
+            (None, Some(i)) => TxClass {
+                class: i,
+                from: None,
+            },
+            (None, None) => TxClass {
+                class: heuristic(&outs),
+                from: None,
+            },
         }
     }
 }
@@ -204,7 +242,11 @@ fn heuristic(outs: &[&BoxData]) -> Classification {
     } else {
         Kind::Contract
     };
-    Classification { name: kind.label().to_string(), kind, color: kind.base_color() }
+    Classification {
+        name: kind.label().to_string(),
+        kind,
+        color: kind.base_color(),
+    }
 }
 
 #[cfg(test)]
@@ -219,16 +261,28 @@ mod tests {
     const CONTRACT: &str = "4MQyMKvMbnCJG3aJ";
 
     fn local(address: &str, name: &str) -> LocalAddress {
-        LocalAddress { address: address.into(), name: name.into(), kind: None, color: None }
+        LocalAddress {
+            address: address.into(),
+            name: name.into(),
+            kind: None,
+            color: None,
+        }
     }
 
     fn book(address: &str, name: &str, kind: Kind) -> BookEntry {
-        BookEntry { address: address.into(), name: name.into(), kind }
+        BookEntry {
+            address: address.into(),
+            name: name.into(),
+            kind,
+        }
     }
 
     #[test]
     fn local_beats_book_beats_builtin() {
-        let builtin = Builtin { addresses: vec![local(WALLET_A, "Builtin")], ..Default::default() };
+        let builtin = Builtin {
+            addresses: vec![local(WALLET_A, "Builtin")],
+            ..Default::default()
+        };
         let c = Classifier::new(&builtin, &[], &[]);
         assert_eq!(c.lookup(WALLET_A).unwrap().name, "Builtin");
 
@@ -245,7 +299,11 @@ mod tests {
     #[test]
     fn prefix_rules_match_after_exact_miss() {
         let builtin = Builtin {
-            rules: vec![Rule { name: "Spectrum".into(), kind: "Service".into(), address_prefix: "4MQy".into() }],
+            rules: vec![Rule {
+                name: "Spectrum".into(),
+                kind: "Service".into(),
+                address_prefix: "4MQy".into(),
+            }],
             ..Default::default()
         };
         let c = Classifier::new(&builtin, &[], &[]);
@@ -255,9 +313,17 @@ mod tests {
 
     #[test]
     fn tx_uses_output_match_and_reports_input_side() {
-        let books = [book(WALLET_A, "Kucoin", Kind::Exchange), book(CONTRACT, "Spectrum", Kind::Service)];
+        let books = [
+            book(WALLET_A, "Kucoin", Kind::Exchange),
+            book(CONTRACT, "Spectrum", Kind::Service),
+        ];
         let c = Classifier::new(&Builtin::default(), &books, &[]);
-        let t = tx("t", 300, vec![bx(WALLET_A, 10)], vec![bx(CONTRACT, 9), bx(FEE_ADDRESS, 1)]);
+        let t = tx(
+            "t",
+            300,
+            vec![bx(WALLET_A, 10)],
+            vec![bx(CONTRACT, 9), bx(FEE_ADDRESS, 1)],
+        );
         let tc = c.classify_tx(&t);
         assert_eq!(tc.class.name, "Spectrum");
         assert_eq!(tc.from.as_deref(), Some("Kucoin"));
@@ -267,7 +333,12 @@ mod tests {
     fn tx_falls_back_to_input_match() {
         let books = [book(WALLET_A, "Kucoin", Kind::Exchange)];
         let c = Classifier::new(&Builtin::default(), &books, &[]);
-        let t = tx("t", 300, vec![bx(WALLET_A, 10)], vec![bx(WALLET_B, 9), bx(FEE_ADDRESS, 1)]);
+        let t = tx(
+            "t",
+            300,
+            vec![bx(WALLET_A, 10)],
+            vec![bx(WALLET_B, 9), bx(FEE_ADDRESS, 1)],
+        );
         let tc = c.classify_tx(&t);
         assert_eq!(tc.class.name, "Kucoin");
         assert_eq!(tc.from, None);
@@ -290,12 +361,19 @@ mod tests {
         builtin.colors.insert("Spectrum".into(), "#3498db".into());
         let mut mine = local(WALLET_B, "Mine");
         mine.color = Some("#ff00ff".into());
-        let books = [book(CONTRACT, "Spectrum", Kind::Service), book(WALLET_A, "Other", Kind::Service)];
+        let books = [
+            book(CONTRACT, "Spectrum", Kind::Service),
+            book(WALLET_A, "Other", Kind::Service),
+        ];
         let c = Classifier::new(&builtin, &books, &[mine]);
         assert_eq!(c.lookup(WALLET_B).unwrap().color, Rgb(0xff, 0x00, 0xff));
         assert_eq!(c.lookup(CONTRACT).unwrap().color, Rgb(0x34, 0x98, 0xdb));
         let shade = c.lookup(WALLET_A).unwrap().color;
-        assert_eq!(shade, c.lookup(WALLET_A).unwrap().color, "stable across calls");
+        assert_eq!(
+            shade,
+            c.lookup(WALLET_A).unwrap().color,
+            "stable across calls"
+        );
     }
 
     #[test]

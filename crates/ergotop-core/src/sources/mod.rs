@@ -55,11 +55,25 @@ use crate::model::{Block, NodeInfo, SourceId, SourceStatus, TokenMeta, Tx, TxId}
 
 #[derive(Clone, Debug)]
 pub enum SourceEvent {
-    Status { source: SourceId, status: SourceStatus },
+    Status {
+        source: SourceId,
+        status: SourceStatus,
+    },
     /// `ids` is the full current mempool of `source`; `new_txs` are bodies not sent before.
-    Mempool { source: SourceId, ids: Vec<TxId>, new_txs: Vec<Tx>, latency_ms: u64 },
-    Block { source: SourceId, block: Block },
-    Info { source: SourceId, info: NodeInfo },
+    Mempool {
+        source: SourceId,
+        ids: Vec<TxId>,
+        new_txs: Vec<Tx>,
+        latency_ms: u64,
+    },
+    Block {
+        source: SourceId,
+        block: Block,
+    },
+    Info {
+        source: SourceId,
+        info: NodeInfo,
+    },
     Price(f64),
     AddressBook(Vec<BookEntry>),
     TokenMeta(TokenMeta),
