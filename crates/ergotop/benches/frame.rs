@@ -27,6 +27,7 @@ fn items(n: usize) -> Vec<VizItem> {
                 size_bytes: 200 + (seed >> 33) as u32 % 20_000,
                 fee: 1_000_000 + (seed >> 20) % 10_000_000,
                 color: Color::Rgb((seed >> 8) as u8, (seed >> 16) as u8, (seed >> 24) as u8),
+                pending: false,
             }
         })
         .collect()
@@ -38,17 +39,17 @@ fn bench(c: &mut Criterion) {
         b.iter(|| {
             let mut v = Visualizer::new();
             v.set_size(W, H_CELLS * 2);
-            v.relayout(&txs, 1_271_009, false, 0);
+            v.relayout(&txs, 1_271_009, 0, true);
         })
     });
     let mut v = Visualizer::new();
     v.set_size(W, H_CELLS * 2);
-    v.relayout(&txs, 1_271_009, false, 0);
+    v.relayout(&txs, 1_271_009, 0, true);
     let area = Rect::new(0, 0, W, H_CELLS);
     c.bench_function("render_frame_10k", |b| {
         b.iter(|| {
             let mut canvas = Canvas::new(W, H_CELLS * 2);
-            v.render(&mut canvas, 0, Color::Gray);
+            v.render(&mut canvas, 0, Color::Gray, Color::Blue);
             let mut buf = Buffer::empty(area);
             canvas.render(area, &mut buf);
         })

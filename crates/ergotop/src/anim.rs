@@ -17,7 +17,10 @@ pub type Point = (f32, f32);
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Ease {
     /// Quadratic ease-in over `fall_ms`, then a sine bounce of `bounce_px` over `BOUNCE_MS`.
-    Gravity { fall_ms: u64, bounce_px: f32 },
+    Gravity {
+        fall_ms: u64,
+        bounce_px: f32,
+    },
     /// Cubic ease-in-out.
     Slide,
     /// Quadratic ease-in (accelerating).
@@ -40,7 +43,13 @@ fn lerp(a: Point, b: Point, p: f32) -> Point {
 
 impl Tween {
     pub fn at_rest(p: Point) -> Tween {
-        Tween { from: p, to: p, start_ms: 0, dur_ms: 0, ease: Ease::Linear }
+        Tween {
+            from: p,
+            to: p,
+            start_ms: 0,
+            dur_ms: 0,
+            ease: Ease::Linear,
+        }
     }
 
     pub fn end_ms(&self) -> u64 {
@@ -71,7 +80,11 @@ impl Tween {
                 }
             }
             Ease::Slide => {
-                let p = if u < 0.5 { 4.0 * u * u * u } else { 1.0 - (-2.0 * u + 2.0).powi(3) / 2.0 };
+                let p = if u < 0.5 {
+                    4.0 * u * u * u
+                } else {
+                    1.0 - (-2.0 * u + 2.0).powi(3) / 2.0
+                };
                 lerp(self.from, self.to, p)
             }
             Ease::Launch => lerp(self.from, self.to, u * u),
@@ -92,20 +105,47 @@ pub fn gravity_drop(from: Point, to: Point, start_ms: u64, height: u16) -> Tween
     let fall = fall_ms(d, height);
     let bounce_px = (BOUNCE_FRACTION * d).min(BOUNCE_MAX_PX);
     let tail = if bounce_px > 0.0 { BOUNCE_MS } else { 0 };
-    Tween { from, to, start_ms, dur_ms: fall + tail, ease: Ease::Gravity { fall_ms: fall, bounce_px } }
+    Tween {
+        from,
+        to,
+        start_ms,
+        dur_ms: fall + tail,
+        ease: Ease::Gravity {
+            fall_ms: fall,
+            bounce_px,
+        },
+    }
 }
 
 pub fn slide(from: Point, to: Point, start_ms: u64) -> Tween {
-    Tween { from, to, start_ms, dur_ms: SLIDE_MS, ease: Ease::Slide }
+    Tween {
+        from,
+        to,
+        start_ms,
+        dur_ms: SLIDE_MS,
+        ease: Ease::Slide,
+    }
 }
 
 pub fn launch(from: Point, top: f32, start_ms: u64) -> Tween {
-    Tween { from, to: (from.0, top), start_ms, dur_ms: LAUNCH_MS, ease: Ease::Launch }
+    Tween {
+        from,
+        to: (from.0, top),
+        start_ms,
+        dur_ms: LAUNCH_MS,
+        ease: Ease::Launch,
+    }
 }
 
 /// A y-only glide (x stays 0), used for the fill-line level.
 pub fn glide(from: f32, to: f32, start_ms: u64) -> Tween {
-    Tween { from: (0.0, from), to: (0.0, to), start_ms, dur_ms: GLIDE_MS, ease: Ease::Linear }
+    Tween {
+        from: (0.0, from),
+        to: (0.0, to),
+        start_ms,
+        dur_ms: GLIDE_MS,
+        ease: Ease::Linear,
+    }
 }
 
 pub fn avalanche_delay(x: u16, width: u16) -> u64 {
@@ -135,10 +175,16 @@ mod tests {
         assert_eq!(t.pos(999), (3.0, 20.0));
         assert_eq!(t.pos(1000), (3.0, 20.0));
         let mid = t.pos(1600).1;
-        assert!(20.0 - mid < mid, "second half of the fall covers more ground (mid = {mid})");
+        assert!(
+            20.0 - mid < mid,
+            "second half of the fall covers more ground (mid = {mid})"
+        );
         assert_eq!(t.pos(2200), (3.0, 0.0), "lands at the end of the fall");
         let peak = t.pos(2200 + BOUNCE_MS / 2).1;
-        assert!((peak - 2.0).abs() < 1e-4, "bounce peak is capped at 2 px (got {peak})");
+        assert!(
+            (peak - 2.0).abs() < 1e-4,
+            "bounce peak is capped at 2 px (got {peak})"
+        );
         assert_eq!(t.end_ms(), 2200 + BOUNCE_MS);
         assert_eq!(t.pos(t.end_ms()), (3.0, 0.0));
         assert!(t.done(t.end_ms()));

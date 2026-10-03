@@ -104,10 +104,11 @@ pub struct App {
     pub show_only: bool,
     pub theme: Theme,
     pub viz: Visualizer,
+    /// Txs that left the pool but still occupy their slot until mined, dropped or expired.
+    leaving: HashMap<TxId, VizItem>,
     pub status: Option<(String, u64)>,
     pub block_flash_until: u64,
     pub banner: Option<String>,
-    last_tick_ms: u64,
     /// Latest time seen from events, keys or ticks (ms); stamps visualizer relayouts.
     clock_ms: u64,
 }
@@ -162,10 +163,10 @@ impl App {
             show_only: false,
             theme: Theme::by_name(&ui.theme),
             viz: Visualizer::new(),
+            leaving: HashMap::new(),
             status: None,
             block_flash_until: 0,
             banner: None,
-            last_tick_ms: 0,
             clock_ms: 0,
         }
     }
@@ -198,10 +199,16 @@ impl App {
             match u {
                 Update::Added(_) => changed = true,
                 Update::Dropped(ids) => {
-                    self.viz.forget(ids);
+                    for id in ids {
+                        self.leaving.remove(id);
+                    }
+                    self.viz.on_dropped(ids, now_ms);
                     changed = true;
                 }
                 Update::Mined { tx_ids, .. } => {
+                    for id in tx_ids {
+                        self.leaving.remove(id);
+                    }
                     self.viz.on_mined(tx_ids, now_ms);
                     changed = true;
                 }
@@ -215,6 +222,14 @@ impl App {
                 }
                 Update::SourcesChanged => {}
             }
+        }
+        if !changed {
+            // A poll that only removes txs emits no update, but their sprites must become pending.
+            let pool = self.rec.pool();
+            changed = self
+                .viz
+                .placed()
+                .any(|s| s.state == crate::viz::State::Active && !pool.contains_key(&s.id));
         }
         if changed {
             self.relayout(animate);
@@ -246,19 +261,39 @@ impl App {
     }
 
     pub fn relayout(&mut self, animate: bool) {
-        let items: Vec<VizItem> = self
-            .rec
-            .pool()
+        let pool = self.rec.pool();
+        if animate {
+            for s in self.viz.placed() {
+                if !pool.contains_key(&s.id) && !self.leaving.contains_key(&s.id) {
+                    self.leaving.insert(
+                        s.id.clone(),
+                        VizItem {
+                            id: s.id.clone(),
+                            size_bytes: s.size_bytes,
+                            fee: s.fee,
+                            color: s.color,
+                            pending: true,
+                        },
+                    );
+                }
+            }
+        } else {
+            self.leaving.clear();
+        }
+        self.leaving.retain(|id, _| !pool.contains_key(id));
+        let mut items: Vec<VizItem> = pool
             .values()
             .map(|e| VizItem {
                 id: e.tx.id.clone(),
                 size_bytes: e.tx.size,
                 fee: e.metrics.fee,
                 color: rgb(e.class.class.color),
+                pending: false,
             })
             .collect();
+        items.extend(self.leaving.values().cloned());
         let capacity = self.max_block_size();
-        self.viz.relayout(&items, capacity, animate, self.clock_ms);
+        self.viz.relayout(&items, capacity, self.clock_ms, !animate);
     }
 
     pub fn resize_viz(&mut self, w_cells: u16, h_cells: u16) {
@@ -457,13 +492,14 @@ impl App {
 
     pub fn tick(&mut self, now_ms: u64) -> bool {
         self.clock_ms = self.clock_ms.max(now_ms);
-        let dt = if self.last_tick_ms == 0 {
-            0
-        } else {
-            now_ms.saturating_sub(self.last_tick_ms).min(100)
-        };
-        self.last_tick_ms = now_ms;
-        let animating = self.viz.tick(dt, now_ms);
+        let expired = self.viz.expire_pending(now_ms);
+        if !expired.is_empty() {
+            for id in &expired {
+                self.leaving.remove(id);
+            }
+            self.relayout(true);
+        }
+        let animating = self.viz.tick(now_ms);
         let had_status = self.status.is_some();
         if self
             .status
@@ -1047,7 +1083,7 @@ mod tests {
         let flashing = app
             .viz
             .sprites()
-            .filter(|s| matches!(s.phase, crate::viz::Phase::Flashing { .. }))
+            .filter(|s| matches!(s.state, crate::viz::State::Flashing { .. }))
             .count();
         assert_eq!(
             flashing, 1,

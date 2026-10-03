@@ -19,11 +19,11 @@ pub fn viz_panel(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
     let t = app.theme;
     let max = app.max_block_size() as u64;
     let r = &app.viz.last;
-    let pct = r.block_bytes * 100 / max.max(1);
+    let pct = app.viz.block_bytes * 100 / max.max(1);
     let mut title = format!(
         "NEXT BLOCK  {} tx · {} / {} ({pct}%)",
-        r.block_count,
-        format::bytes(r.block_bytes),
+        app.viz.block_count,
+        format::bytes(app.viz.block_bytes),
         format::bytes(max)
     );
     if app.viz.shape == ergotop_core::packing::Shape::Hexagon {
@@ -42,7 +42,8 @@ pub fn viz_panel(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
         Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
     app.resize_viz(canvas_area.width, canvas_area.height);
     let mut canvas = Canvas::new(canvas_area.width, canvas_area.height * 2);
-    app.viz.render(&mut canvas, now_ms, t.dim);
+    app.viz
+        .render(&mut canvas, now_ms, t.dim, crate::viz::dim(t.accent));
     canvas.render(canvas_area, f.buffer_mut());
     let mut spans = Vec::new();
     for (name, color, n) in origin_counts(app).into_iter().take(6) {
