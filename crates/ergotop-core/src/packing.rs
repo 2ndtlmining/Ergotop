@@ -108,7 +108,7 @@ fn pack_region(
             let cols = x as usize..(x + side) as usize;
             let y = cols.clone().map(|c| sky[c]).max().unwrap_or(0);
             let fits = cols.clone().all(|c| y >= lo[c] && y + side <= hi[c]);
-            if fits && best.map_or(true, |(by, bx)| (y, x) < (by, bx)) {
+            if fits && best.is_none_or(|(by, bx)| (y, x) < (by, bx)) {
                 best = Some((y, x));
             }
         }
