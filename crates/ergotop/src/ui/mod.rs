@@ -338,4 +338,24 @@ pub(crate) mod tests {
             }
         }
     }
+
+    #[test]
+    fn sources_view_shows_the_full_status_reason() {
+        use ergotop_core::model::{SourceId, SourceStatus};
+        use ergotop_core::sources::SourceEvent;
+        let mut app = sample_app();
+        app.view = View::Sources;
+        let status = SourceStatus::Degraded("partial: 10 of 19 txs served".into());
+        app.on_source_event(
+            SourceEvent::Status {
+                source: SourceId("p2p".into()),
+                status,
+            },
+            NOW,
+        );
+        assert_contains(
+            &screen(&mut app, 140, 30),
+            &["degraded: partial: 10 of 19 txs served"],
+        );
+    }
 }

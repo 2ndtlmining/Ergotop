@@ -41,7 +41,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
                     SourceKind::Explorer => "explorer",
                 }),
                 Cell::from(Span::styled(
-                    format::trunc(&status, 28),
+                    format::trunc(&status, 80),
                     Style::new().fg(color),
                 )),
                 Cell::from(
@@ -84,13 +84,13 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let widths = [
         Constraint::Length(16),
         Constraint::Length(9),
-        Constraint::Length(30),
+        Constraint::Min(30),
         Constraint::Length(8),
         Constraint::Length(6),
         Constraint::Length(10),
         Constraint::Length(11),
         Constraint::Length(10),
-        Constraint::Min(8),
+        Constraint::Length(9),
     ];
     let table = Table::new(rows, widths)
         .header(header)
