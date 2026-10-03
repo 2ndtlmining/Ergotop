@@ -9,6 +9,7 @@ use super::{kv, origin_counts, origin_text, panel, util_color};
 use crate::app::App;
 use crate::format;
 use crate::theme::rgb;
+use ergotop_core::reconcile::TxEntry;
 
 pub fn draw(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
     let [left, center, right] = Layout::horizontal([
@@ -30,10 +31,12 @@ pub fn draw(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
     summary(f, summary_area, app, now_ms);
     blocks(f, blocks_area, app, now_ms);
     super::packing::viz_panel(f, viz_area, app, now_ms);
-    tx_table(f, table_area, app, now_ms);
+    // Filter + sort the pool once per frame; the table and the SELECTED panel share it.
+    let rows = app.rows();
+    tx_table(f, table_area, app, &rows, now_ms);
     network(f, net_area, app);
     origins(f, origin_area, app);
-    selected(f, detail_area, app, now_ms);
+    selected(f, detail_area, app, rows.get(app.selected).copied(), now_ms);
 }
 
 fn bar(pct: u64, width: usize) -> String {
@@ -115,9 +118,8 @@ fn blocks(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
     );
 }
 
-fn tx_table(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
+fn tx_table(f: &mut Frame, area: Rect, app: &App, rows: &[&TxEntry], now_ms: u64) {
     let t = app.theme;
-    let rows = app.rows();
     let title = format!(
         "TRANSACTIONS {} · sort:{}{}",
         rows.len(),
@@ -226,9 +228,9 @@ fn origins(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-fn selected(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
+fn selected(f: &mut Frame, area: Rect, app: &App, entry: Option<&TxEntry>, now_ms: u64) {
     let t = app.theme;
-    let lines = match app.selected_entry() {
+    let lines = match entry {
         None => vec![Line::from("No transaction selected")],
         Some(e) => vec![
             kv("ID", format::short_id(&e.tx.id)),

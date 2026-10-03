@@ -68,14 +68,14 @@ pub(crate) fn util_color(pct: u64, t: &Theme) -> Color {
 }
 
 /// (name, color, count) per classification, most common first.
-pub(crate) fn origin_counts(app: &App) -> Vec<(String, Rgb, usize)> {
-    let mut m: HashMap<String, (Rgb, usize)> = HashMap::new();
+pub(crate) fn origin_counts(app: &App) -> Vec<(&str, Rgb, usize)> {
+    let mut m: HashMap<&str, (Rgb, usize)> = HashMap::new();
     for e in app.rec.pool().values() {
         let c = &e.class.class;
-        m.entry(c.name.clone()).or_insert((c.color, 0)).1 += 1;
+        m.entry(c.name.as_str()).or_insert((c.color, 0)).1 += 1;
     }
-    let mut v: Vec<(String, Rgb, usize)> = m.into_iter().map(|(n, (c, k))| (n, c, k)).collect();
-    v.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+    let mut v: Vec<(&str, Rgb, usize)> = m.into_iter().map(|(n, (c, k))| (n, c, k)).collect();
+    v.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(b.0)));
     v
 }
 

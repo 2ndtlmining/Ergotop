@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ergotop_core::classify::{BookEntry, Builtin, Classifier};
 use ergotop_core::config::{AddressesFile, LocalAddress, SourceSpec, UiConfig};
 use ergotop_core::metrics::FEE_ADDRESS;
-use ergotop_core::model::{nano_to_erg, Block, NodeInfo, SourceKind, Token, TokenMeta};
+use ergotop_core::model::{nano_to_erg, Block, NodeInfo, SourceKind, Token, TokenMeta, TxId};
 use ergotop_core::packing::Shape;
 use ergotop_core::reconcile::{Reconciler, TxEntry, Update};
 use ergotop_core::sources::SourceEvent;
@@ -98,6 +98,8 @@ pub struct App {
     pub filtering: bool,
     pub sort: SortKey,
     pub selected: usize,
+    /// The selected tx; `selected` is re-derived from it whenever rows change.
+    selected_id: Option<TxId>,
     pub source_sel: usize,
     pub show_only: bool,
     pub theme: Theme,
@@ -106,6 +108,8 @@ pub struct App {
     pub block_flash_until: u64,
     pub banner: Option<String>,
     last_tick_ms: u64,
+    /// Latest time seen from events, keys or ticks (ms); stamps visualizer relayouts.
+    clock_ms: u64,
 }
 
 fn matches_filter(e: &TxEntry, filter: &str) -> bool {
@@ -153,6 +157,7 @@ impl App {
             filtering: false,
             sort: SortKey::Fee,
             selected: 0,
+            selected_id: None,
             source_sel: 0,
             show_only: false,
             theme: Theme::by_name(&ui.theme),
@@ -161,16 +166,19 @@ impl App {
             block_flash_until: 0,
             banner: None,
             last_tick_ms: 0,
+            clock_ms: 0,
         }
     }
 
     pub fn on_source_event(&mut self, ev: SourceEvent, now_ms: u64) {
+        self.clock_ms = self.clock_ms.max(now_ms);
         match ev {
             SourceEvent::AddressBook(entries) => {
                 self.book = entries;
                 self.cls = Classifier::new(&self.builtin, &self.book, &self.local);
                 self.rec.reclassify(&self.cls);
                 self.relayout(false);
+                self.clamp_selection();
             }
             SourceEvent::Price(p) => self.price = Some(p),
             SourceEvent::TokenMeta(m) => {
@@ -188,7 +196,11 @@ impl App {
         let mut animate = true;
         for u in updates {
             match u {
-                Update::Added(_) | Update::Dropped(_) => changed = true,
+                Update::Added(_) => changed = true,
+                Update::Dropped(ids) => {
+                    self.viz.forget(ids);
+                    changed = true;
+                }
                 Update::Mined { tx_ids, .. } => {
                     self.viz.on_mined(tx_ids, now_ms);
                     changed = true;
@@ -246,7 +258,7 @@ impl App {
             })
             .collect();
         let capacity = self.max_block_size();
-        self.viz.relayout(&items, capacity, animate);
+        self.viz.relayout(&items, capacity, animate, self.clock_ms);
     }
 
     pub fn resize_viz(&mut self, w_cells: u16, h_cells: u16) {
@@ -300,9 +312,32 @@ impl App {
         self.rows().get(self.selected).copied()
     }
 
+    /// Keeps the selection on the same tx as rows shift; closes the detail popup if it left.
     fn clamp_selection(&mut self) {
-        let n = self.rows().len();
-        self.selected = if n == 0 { 0 } else { self.selected.min(n - 1) };
+        let (found, n, lost_id) = {
+            let rows = self.rows();
+            let found = self
+                .selected_id
+                .as_ref()
+                .and_then(|id| rows.iter().position(|e| &e.tx.id == id));
+            let lost_id = if found.is_none() {
+                self.selected_id.clone()
+            } else {
+                None
+            };
+            (found, rows.len(), lost_id)
+        };
+        self.selected = match found {
+            Some(p) => p,
+            None if n == 0 => 0,
+            None => self.selected.min(n - 1),
+        };
+        if let (Some(id), Overlay::Detail) = (&lost_id, self.overlay) {
+            let msg = format!("tx {} left the mempool", format::short_id(id));
+            self.overlay = Overlay::None;
+            self.set_status(msg, self.clock_ms);
+        }
+        self.selected_id = self.rows().get(self.selected).map(|e| e.tx.id.clone());
         let s = self.rec.views().len();
         self.source_sel = if s == 0 {
             0
@@ -415,6 +450,7 @@ impl App {
     }
 
     pub fn tick(&mut self, now_ms: u64) -> bool {
+        self.clock_ms = self.clock_ms.max(now_ms);
         let dt = if self.last_tick_ms == 0 {
             0
         } else {
@@ -434,6 +470,7 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: KeyEvent, now_ms: u64) -> Action {
+        self.clock_ms = self.clock_ms.max(now_ms);
         if key.kind != KeyEventKind::Press {
             return Action::None;
         }
@@ -453,7 +490,7 @@ impl App {
                 KeyCode::Char(c) => self.filter.push(c),
                 _ => {}
             }
-            self.selected = 0;
+            self.clamp_selection();
             return Action::None;
         }
         if self.overlay != Overlay::None {
@@ -543,6 +580,7 @@ impl App {
         } else {
             let n = self.rows().len() as i64;
             self.selected = (self.selected as i64 + delta).clamp(0, (n - 1).max(0)) as usize;
+            self.selected_id = self.rows().get(self.selected).map(|e| e.tx.id.clone());
         }
         Action::None
     }
@@ -567,7 +605,7 @@ pub(crate) mod testkit {
         format!("{prefix}{}", "0".repeat(64 - prefix.len()))
     }
 
-    fn bx(address: &str, value: u64) -> BoxData {
+    pub fn bx(address: &str, value: u64) -> BoxData {
         BoxData {
             box_id: format!("box-{address}-{value}"),
             value,
@@ -576,7 +614,7 @@ pub(crate) mod testkit {
         }
     }
 
-    fn tx(id: &str, size: u32, from: &str, outputs: Vec<BoxData>) -> Tx {
+    pub fn tx(id: &str, size: u32, from: &str, outputs: Vec<BoxData>) -> Tx {
         let total: u64 = outputs.iter().map(|o| o.value).sum::<u64>() + 1_000;
         let input = bx(from, total);
         Tx {
@@ -932,6 +970,101 @@ mod tests {
                 amount: 7
             }),
             "7"
+        );
+    }
+
+    fn block_with(height: u32, txs: Vec<String>) -> SourceEvent {
+        SourceEvent::Block {
+            source: SourceId("node-a".into()),
+            block: Block {
+                id: format!("hdr-{height}"),
+                height,
+                timestamp_ms: NOW,
+                size: 1000,
+                tx_ids: txs,
+                miner_address: Some(POOL_2MINERS.into()),
+                miner_reward: 12_000_000_000,
+            },
+        }
+    }
+
+    fn node_mempool(ids: Vec<String>, new_txs: Vec<ergotop_core::model::Tx>) -> SourceEvent {
+        SourceEvent::Mempool {
+            source: SourceId("node-a".into()),
+            ids,
+            new_txs,
+            latency_ms: 20,
+        }
+    }
+
+    #[test]
+    fn mined_txs_flash_when_the_mempool_drops_them_before_the_block_arrives() {
+        let mut app = sample_app();
+        let e5 = tx(
+            "e5",
+            500,
+            WALLET,
+            vec![bx(CONTRACT, 2_000_000_000), bx(FEE_ADDRESS, 1_200_000)],
+        );
+        app.on_source_event(
+            node_mempool(vec![tid("b2"), tid("c3"), tid("d4"), tid("e5")], vec![e5]),
+            NOW + 1_000,
+        );
+        app.on_source_event(
+            block_with(1_886_102, vec!["cb2".into(), tid("a1")]),
+            NOW + 3_000,
+        );
+        let flashing = app
+            .viz
+            .sprites()
+            .filter(|s| matches!(s.phase, crate::viz::Phase::Flashing { .. }))
+            .count();
+        assert_eq!(
+            flashing, 1,
+            "a1 flashes even though it left the pool before its block was seen"
+        );
+    }
+
+    #[test]
+    fn detail_follows_the_selected_tx_when_rows_shift() {
+        let mut app = sample_app();
+        app.on_key(key(KeyCode::Down), NOW);
+        assert_eq!(app.selected_entry().unwrap().tx.id, tid("b2"));
+        app.on_key(key(KeyCode::Enter), NOW);
+        let f9 = tx(
+            "f9",
+            300,
+            WALLET,
+            vec![bx(CONTRACT, 1_000_000_000), bx(FEE_ADDRESS, 50_000_000)],
+        );
+        let ids = vec![tid("a1"), tid("b2"), tid("c3"), tid("d4"), tid("f9")];
+        app.on_source_event(node_mempool(ids, vec![f9]), NOW + 1_000);
+        assert_eq!(
+            app.selected_entry().unwrap().tx.id,
+            tid("b2"),
+            "selection follows the tx, not the row"
+        );
+        assert_eq!(app.overlay, Overlay::Detail);
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('c')), NOW + 1_000),
+            Action::Copy(tid("b2"))
+        );
+    }
+
+    #[test]
+    fn detail_closes_when_its_tx_leaves_the_mempool() {
+        let mut app = sample_app();
+        app.on_key(key(KeyCode::Enter), NOW);
+        assert_eq!(app.overlay, Overlay::Detail);
+        app.on_source_event(
+            node_mempool(vec![tid("a1"), tid("b2"), tid("c3")], vec![]),
+            NOW + 1_000,
+        );
+        assert_eq!(app.overlay, Overlay::None, "no invisible popup left behind");
+        assert!(app.status.as_ref().unwrap().0.contains("left the mempool"));
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('q')), NOW + 1_000),
+            Action::Quit
         );
     }
 }

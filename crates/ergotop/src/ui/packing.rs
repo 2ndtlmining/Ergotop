@@ -47,7 +47,7 @@ pub fn viz_panel(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
     let mut spans = Vec::new();
     for (name, color, n) in origin_counts(app).into_iter().take(6) {
         spans.push(Span::styled("■ ", Style::new().fg(rgb(color))));
-        spans.push(Span::raw(format!("{} {n}  ", format::trunc(&name, 14))));
+        spans.push(Span::raw(format!("{} {n}  ", format::trunc(name, 14))));
     }
     f.render_widget(
         Paragraph::new(Line::from(spans)).style(Style::new().fg(t.dim)),

@@ -11,6 +11,9 @@ pub const FALL_PX_PER_S: f32 = 60.0;
 pub const LEAVE_PX_PER_S: f32 = 90.0;
 pub const FLASH_MS: u64 = 600;
 pub const MAX_SIDE: u16 = 6;
+/// How long a sprite whose tx left the pool is kept (unrendered) in case its block
+/// arrives later; must exceed the reconciler's drop grace plus block-poll cadence.
+pub const PARK_MS: u64 = 30_000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
@@ -46,6 +49,7 @@ pub struct Visualizer {
     pub last: PackResult,
     sprites: HashMap<TxId, Sprite>,
     leaving: Vec<Sprite>,
+    parked: HashMap<TxId, (Sprite, u64)>,
 }
 
 impl Default for Visualizer {
@@ -70,6 +74,7 @@ impl Visualizer {
             last: PackResult::default(),
             sprites: HashMap::new(),
             leaving: Vec::new(),
+            parked: HashMap::new(),
         }
     }
 
@@ -102,7 +107,7 @@ impl Visualizer {
         self.sprites.values().chain(self.leaving.iter())
     }
 
-    pub fn relayout(&mut self, items: &[VizItem], capacity: u32, animate: bool) {
+    pub fn relayout(&mut self, items: &[VizItem], capacity: u32, animate: bool, now_ms: u64) {
         let pack_items: Vec<PackItem> = items
             .iter()
             .map(|i| PackItem {
@@ -154,13 +159,29 @@ impl Visualizer {
             };
             next.insert(p.id.clone(), sprite);
         }
+        for (id, s) in self.sprites.drain() {
+            self.parked.insert(id, (s, now_ms));
+        }
+        self.parked
+            .retain(|_, (_, at)| now_ms.saturating_sub(*at) <= PARK_MS);
         self.sprites = next;
         self.last = result;
     }
 
+    /// Drops parked sprites of txs that left the mempool without being mined.
+    pub fn forget(&mut self, ids: &[TxId]) {
+        for id in ids {
+            self.parked.remove(id);
+        }
+    }
+
     pub fn on_mined(&mut self, ids: &[TxId], now_ms: u64) {
         for id in ids {
-            if let Some(mut s) = self.sprites.remove(id) {
+            if let Some(mut s) = self
+                .sprites
+                .remove(id)
+                .or_else(|| self.parked.remove(id).map(|(s, _)| s))
+            {
                 s.phase = Phase::Flashing {
                     until_ms: now_ms + FLASH_MS,
                 };
@@ -237,7 +258,7 @@ mod tests {
     fn relayout_without_animation_places_sprites_at_rest() {
         let mut v = Visualizer::new();
         v.set_size(20, 20);
-        v.relayout(&[item("a", 1000, 10)], 1_000_000, false);
+        v.relayout(&[item("a", 1000, 10)], 1_000_000, false, 0);
         let s = v.sprite("a").unwrap();
         assert_eq!(s.phase, Phase::Resting);
         assert_eq!(s.target_y, 0);
@@ -248,7 +269,7 @@ mod tests {
     fn new_sprites_fall_from_the_top_and_come_to_rest() {
         let mut v = Visualizer::new();
         v.set_size(20, 20);
-        v.relayout(&[item("a", 1000, 10)], 1_000_000, true);
+        v.relayout(&[item("a", 1000, 10)], 1_000_000, true, 0);
         assert_eq!(v.sprite("a").unwrap().y, 20.0);
         assert!(v.tick(100, 0));
         assert!(v.sprite("a").unwrap().y < 20.0);
@@ -263,7 +284,7 @@ mod tests {
     fn mined_sprites_flash_then_leave() {
         let mut v = Visualizer::new();
         v.set_size(20, 20);
-        v.relayout(&[item("a", 1000, 10)], 1_000_000, false);
+        v.relayout(&[item("a", 1000, 10)], 1_000_000, false, 0);
         v.on_mined(&["a".to_string()], 1_000);
         assert!(v.sprite("a").is_none());
         assert_eq!(v.sprites().count(), 1);
@@ -281,8 +302,9 @@ mod tests {
             &[item("a", 1000, 10), item("b", 1000, 10)],
             1_000_000,
             false,
+            0,
         );
-        v.relayout(&[item("b", 1000, 10)], 1_000_000, false);
+        v.relayout(&[item("b", 1000, 10)], 1_000_000, false, 0);
         assert!(v.sprite("a").is_none());
         assert!(v.sprite("b").is_some());
     }
@@ -291,7 +313,7 @@ mod tests {
     fn render_paints_block_sprites_and_dims_overflow() {
         let mut v = Visualizer::new();
         v.set_size(10, 8);
-        v.relayout(&[item("a", 400, 4000), item("b", 400, 1)], 500, false);
+        v.relayout(&[item("a", 400, 4000), item("b", 400, 1)], 500, false, 0);
         let a = v.sprite("a").unwrap().clone();
         let b = v.sprite("b").unwrap().clone();
         assert_eq!(a.region, Region::Block);
@@ -300,5 +322,50 @@ mod tests {
         v.render(&mut c, 0, Color::Gray);
         assert_eq!(c.get(a.x, a.target_y), Some(RED));
         assert_eq!(c.get(b.x, b.target_y), Some(Color::Rgb(100, 0, 0)));
+    }
+
+    #[test]
+    fn sprites_removed_by_relayout_still_flash_when_their_block_arrives() {
+        let mut v = Visualizer::new();
+        v.set_size(20, 20);
+        v.relayout(
+            &[item("a", 1000, 10), item("b", 1000, 10)],
+            1_000_000,
+            false,
+            0,
+        );
+        v.relayout(&[item("b", 1000, 10)], 1_000_000, true, 1_000);
+        assert!(v.sprite("a").is_none());
+        v.on_mined(&["a".to_string()], 4_000);
+        let flashing = v
+            .sprites()
+            .filter(|s| matches!(s.phase, Phase::Flashing { .. }))
+            .count();
+        assert_eq!(flashing, 1);
+    }
+
+    #[test]
+    fn parked_sprites_expire_or_are_forgotten() {
+        let mut v = Visualizer::new();
+        v.set_size(20, 20);
+        v.relayout(
+            &[
+                item("a", 1000, 10),
+                item("b", 1000, 10),
+                item("c", 1000, 10),
+            ],
+            1_000_000,
+            false,
+            0,
+        );
+        v.relayout(&[item("c", 1000, 10)], 1_000_000, true, 1_000);
+        v.forget(&["b".to_string()]);
+        v.relayout(&[item("c", 1000, 10)], 1_000_000, true, 1_000 + PARK_MS + 1);
+        v.on_mined(&["a".to_string(), "b".to_string()], 1_000 + PARK_MS + 2);
+        assert_eq!(
+            v.sprites().count(),
+            1,
+            "only c remains; a expired, b forgotten"
+        );
     }
 }
