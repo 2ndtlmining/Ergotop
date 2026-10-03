@@ -55,8 +55,8 @@ ergotop --log ergotop.log    # write diagnostics to a file
 | `s` | Cycle sort: fee → value → size → age → origin |
 | `/` | Filter: name, kind (`exchange`), tx id prefix, `>100`, `<1` (ERG) |
 | `Esc` | Clear filter / close popup |
-| `c` | Copy tx id (OSC 52 — works over SSH in most terminals) |
-| `e` | Open tx in the explorer |
+| `c` | Copy tx id (OSC 52 — works over SSH in most terminals); Sources view: the source URL |
+| `e` | Open tx in the explorer; Sources view: open the source URL |
 | `l` | Toggle hexagon packing |
 | `t` | Cycle theme (neon-green, amber-terminal, blue-ice, high-contrast) |
 | `m` | Toggle motion (animations on/off) |

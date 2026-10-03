@@ -63,6 +63,8 @@ pub struct Visualizer {
     /// Next-block txs and bytes, excluding pending ones.
     pub block_count: usize,
     pub block_bytes: u64,
+    /// Active txs that did not fit on screen (pending ones are not counted).
+    pub not_shown: usize,
     sprites: HashMap<TxId, Sprite>,
     leaving: Vec<Sprite>,
     fill: Tween,
@@ -92,6 +94,7 @@ impl Visualizer {
             last: PackResult::default(),
             block_count: 0,
             block_bytes: 0,
+            not_shown: 0,
             sprites: HashMap::new(),
             leaving: Vec::new(),
             fill: Tween::at_rest((0.0, 0.0)),
@@ -238,6 +241,10 @@ impl Visualizer {
         self.last = result;
         self.block_count = count;
         self.block_bytes = bytes;
+        self.not_shown = items
+            .iter()
+            .filter(|i| !i.pending && !self.sprites.contains_key(&i.id))
+            .count();
 
         let block_h = self.block_height() as f32;
         let level = if capacity == 0 {
@@ -455,6 +462,35 @@ mod tests {
         assert_eq!((b.x, b.target_y), slot);
         assert_eq!(b.state, State::Pending { since_ms: 10 });
         assert_eq!((v.block_count, v.block_bytes), (1, 400));
+    }
+
+    #[test]
+    fn not_shown_counts_only_active_txs() {
+        let mut v = Visualizer::new();
+        v.set_size(4, 4);
+        // Far more txs than a 4x4 grid holds; unplaced pending ones must not count.
+        let ids: Vec<String> = (0..40).map(|i| format!("t{i:02}")).collect();
+        let items: Vec<VizItem> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                if i % 2 == 0 {
+                    item(id, 300, 10)
+                } else {
+                    pending(id, 300, 10)
+                }
+            })
+            .collect();
+        v.relayout(&items, CAP, 0, true);
+        let hidden = |pend: bool| {
+            items
+                .iter()
+                .filter(|i| i.pending == pend && v.sprite(&i.id).is_none())
+                .count()
+        };
+        assert!(hidden(true) > 0 && hidden(false) > 0);
+        assert_eq!(v.last.not_shown, hidden(true) + hidden(false));
+        assert_eq!(v.not_shown, hidden(false));
     }
 
     #[test]
