@@ -1,16 +1,15 @@
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-dist/
-.eggs/
-*.egg
-.venv/
-venv/
-env/
-.env
-*.log
-.claude/
-test_visualizer.py
-/.superpowers
+# Rust build output
 /target
+
+# Local agent workspace
+/.superpowers
+.claude/
+
+# Logs (e.g. ergotop --log)
+*.log
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
