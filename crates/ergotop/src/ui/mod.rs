@@ -233,7 +233,7 @@ pub(crate) mod tests {
         let mut app = App::new(&specs(), Default::default(), &Default::default());
         for view in [View::Dashboard, View::Packing] {
             app.view = view;
-            assert_contains(&screen(&mut app, 120, 30), &["no data source"]);
+            assert_contains(&screen(&mut app, 120, 30), &["connecting"]);
         }
     }
 
