@@ -144,7 +144,7 @@ impl App {
     pub fn new(specs: &[SourceSpec], addrs: AddressesFile, ui: &UiConfig) -> App {
         let builtin = Builtin::load();
         let cls = Classifier::new(&builtin, &[], &addrs.address);
-        App {
+        let mut app = App {
             rec: Reconciler::new(specs.iter().map(|s| (s.id.clone(), s.kind)).collect()),
             cls,
             builtin,
@@ -168,7 +168,9 @@ impl App {
             block_flash_until: 0,
             banner: None,
             clock_ms: 0,
-        }
+        };
+        app.viz.set_motion(ui.motion);
+        app
     }
 
     pub fn on_source_event(&mut self, ev: SourceEvent, now_ms: u64) {
@@ -598,6 +600,12 @@ impl App {
             KeyCode::Char('t') => {
                 self.theme = self.theme.next();
                 self.set_status(format!("Theme: {}", self.theme.name), now_ms);
+                Action::None
+            }
+            KeyCode::Char('m') => {
+                let on = !self.viz.motion;
+                self.viz.set_motion(on);
+                self.set_status(format!("Motion {}", if on { "on" } else { "off" }), now_ms);
                 Action::None
             }
             KeyCode::Char('?') => {
@@ -1076,19 +1084,19 @@ mod tests {
             node_mempool(vec![tid("b2"), tid("c3"), tid("d4"), tid("e5")], vec![e5]),
             NOW + 1_000,
         );
+        let a1 = app.viz.sprite(&tid("a1")).expect("a1 waits in place");
+        assert!(matches!(a1.state, crate::viz::State::Pending { .. }));
         app.on_source_event(
             block_with(1_886_102, vec!["cb2".into(), tid("a1")]),
             NOW + 3_000,
         );
+        assert!(app.viz.sprite(&tid("a1")).is_none());
         let flashing = app
             .viz
             .sprites()
             .filter(|s| matches!(s.state, crate::viz::State::Flashing { .. }))
             .count();
-        assert_eq!(
-            flashing, 1,
-            "a1 flashes even though it left the pool before its block was seen"
-        );
+        assert_eq!(flashing, 1, "a1 launches from where it was built");
     }
 
     #[test]
@@ -1132,5 +1140,52 @@ mod tests {
             app.on_key(key(KeyCode::Char('q')), NOW + 1_000),
             Action::Quit
         );
+    }
+
+    #[test]
+    fn pending_txs_fade_when_the_reconciler_drops_them() {
+        let mut app = sample_app();
+        let rest = vec![tid("b2"), tid("c3"), tid("d4")];
+        app.on_source_event(node_mempool(rest.clone(), vec![]), NOW + 1_000);
+        let a1 = app.viz.sprite(&tid("a1")).expect("a1 still holds its slot");
+        assert!(
+            matches!(a1.state, crate::viz::State::Pending { .. }),
+            "a removal with no other change still marks the tx pending"
+        );
+        app.on_source_event(node_mempool(rest, vec![]), NOW + 17_000);
+        assert!(app.viz.sprite(&tid("a1")).is_none());
+        assert!(app
+            .viz
+            .sprites()
+            .any(|s| matches!(s.state, crate::viz::State::Fading { .. })));
+    }
+
+    #[test]
+    fn pending_txs_expire_after_the_hold() {
+        let mut app = sample_app();
+        app.on_source_event(
+            node_mempool(vec![tid("b2"), tid("c3"), tid("d4")], vec![]),
+            NOW + 1_000,
+        );
+        app.tick(NOW + 1_000 + crate::viz::PENDING_HOLD_MS - 1);
+        assert!(app.viz.sprite(&tid("a1")).is_some());
+        app.tick(NOW + 1_000 + crate::viz::PENDING_HOLD_MS);
+        assert!(app.viz.sprite(&tid("a1")).is_none());
+    }
+
+    #[test]
+    fn m_toggles_motion_and_config_sets_the_default() {
+        let mut app = sample_app();
+        assert!(app.viz.motion);
+        app.on_key(key(KeyCode::Char('m')), NOW);
+        assert!(!app.viz.motion);
+        assert_eq!(app.status.as_ref().unwrap().0, "Motion off");
+        app.on_key(key(KeyCode::Char('m')), NOW);
+        assert!(app.viz.motion);
+        let ui = ergotop_core::config::UiConfig {
+            motion: false,
+            ..Default::default()
+        };
+        assert!(!App::new(&specs(), Default::default(), &ui).viz.motion);
     }
 }

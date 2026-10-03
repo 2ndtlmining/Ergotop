@@ -45,6 +45,7 @@ pub struct UiConfig {
     pub theme: String,
     pub fps: u32,
     pub start_view: String,
+    pub motion: bool,
 }
 
 impl Default for UiConfig {
@@ -53,6 +54,7 @@ impl Default for UiConfig {
             theme: "neon-green".into(),
             fps: 30,
             start_view: "packing".into(),
+            motion: true,
         }
     }
 }
@@ -180,6 +182,7 @@ mod tests {
             theme = "amber-terminal"
             fps = 60
             start_view = "dashboard"
+            motion = false
             "#,
         )
         .unwrap();
@@ -187,6 +190,7 @@ mod tests {
         assert_eq!(ids, vec!["node-a", "http://192.168.1.51:9053", "public"]);
         assert_eq!(cfg.sources()[0].url, "http://192.168.1.50:9053");
         assert_eq!(cfg.ui.fps, 60);
+        assert!(!cfg.ui.motion);
     }
 
     #[test]
@@ -199,6 +203,7 @@ mod tests {
         assert_eq!(specs[1].url, P2P_EXPLORER);
         assert_eq!(specs[2].url, PUBLIC_EXPLORER);
         assert_eq!(Config::default().ui.theme, "neon-green");
+        assert!(Config::default().ui.motion);
     }
 
     #[test]

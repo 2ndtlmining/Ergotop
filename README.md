@@ -52,6 +52,7 @@ ergotop --log ergotop.log    # write diagnostics to a file
 | `e` | Open tx in the explorer |
 | `l` | Toggle hexagon packing |
 | `t` | Cycle theme (neon-green, amber-terminal, blue-ice, high-contrast) |
+| `m` | Toggle motion (animations on/off) |
 | `?` | Help |
 | `q` | Quit |
 
@@ -86,6 +87,7 @@ enabled = ["p2p", "public"]          # backup + cross-check; a full URL also wor
 theme = "neon-green"
 fps = 30
 start_view = "packing"               # dashboard | packing | sources
+motion = true                        # false: no animations
 ```
 
 With no `[[node]]` entries Ergotop tries `http://127.0.0.1:9053`. Environment variables override the file: `ERGO_NODE_URL` (one node), `ERGO_API_URL` (one explorer).
