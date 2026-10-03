@@ -113,16 +113,25 @@ fn matches_filter(e: &TxEntry, filter: &str) -> bool {
     if f.is_empty() {
         return true;
     }
-    if let Some(n) = f.strip_prefix('>').and_then(|s| s.trim().parse::<f64>().ok()) {
+    if let Some(n) = f
+        .strip_prefix('>')
+        .and_then(|s| s.trim().parse::<f64>().ok())
+    {
         return nano_to_erg(e.metrics.value) >= n;
     }
-    if let Some(n) = f.strip_prefix('<').and_then(|s| s.trim().parse::<f64>().ok()) {
+    if let Some(n) = f
+        .strip_prefix('<')
+        .and_then(|s| s.trim().parse::<f64>().ok())
+    {
         return nano_to_erg(e.metrics.value) <= n;
     }
     let f = f.to_lowercase();
     e.class.class.name.to_lowercase().contains(&f)
         || e.class.class.kind.label().to_lowercase().contains(&f)
-        || e.class.from.as_deref().is_some_and(|x| x.to_lowercase().contains(&f))
+        || e.class
+            .from
+            .as_deref()
+            .is_some_and(|x| x.to_lowercase().contains(&f))
         || e.tx.id.starts_with(&f)
 }
 
@@ -202,7 +211,11 @@ impl App {
     }
 
     fn block_banner(&self, height: u32) -> Option<String> {
-        let b = self.rec.recent_blocks().into_iter().find(|b| b.height == height)?;
+        let b = self
+            .rec
+            .recent_blocks()
+            .into_iter()
+            .find(|b| b.height == height)?;
         Some(format!(
             "⛏ Block #{} by {} · {} txs · {} ERG",
             format::thousands(height as u64),
@@ -243,16 +256,41 @@ impl App {
     }
 
     pub fn rows(&self) -> Vec<&TxEntry> {
-        let mut v: Vec<&TxEntry> = self.rec.pool().values().filter(|e| matches_filter(e, &self.filter)).collect();
+        let mut v: Vec<&TxEntry> = self
+            .rec
+            .pool()
+            .values()
+            .filter(|e| matches_filter(e, &self.filter))
+            .collect();
         match self.sort {
-            SortKey::Fee => v.sort_by(|a, b| b.metrics.fee.cmp(&a.metrics.fee).then_with(|| a.tx.id.cmp(&b.tx.id))),
-            SortKey::Value => {
-                v.sort_by(|a, b| b.metrics.value.cmp(&a.metrics.value).then_with(|| a.tx.id.cmp(&b.tx.id)))
-            }
-            SortKey::Size => v.sort_by(|a, b| b.tx.size.cmp(&a.tx.size).then_with(|| a.tx.id.cmp(&b.tx.id))),
-            SortKey::Age => v.sort_by(|a, b| a.first_seen_ms.cmp(&b.first_seen_ms).then_with(|| a.tx.id.cmp(&b.tx.id))),
+            SortKey::Fee => v.sort_by(|a, b| {
+                b.metrics
+                    .fee
+                    .cmp(&a.metrics.fee)
+                    .then_with(|| a.tx.id.cmp(&b.tx.id))
+            }),
+            SortKey::Value => v.sort_by(|a, b| {
+                b.metrics
+                    .value
+                    .cmp(&a.metrics.value)
+                    .then_with(|| a.tx.id.cmp(&b.tx.id))
+            }),
+            SortKey::Size => v.sort_by(|a, b| {
+                b.tx.size
+                    .cmp(&a.tx.size)
+                    .then_with(|| a.tx.id.cmp(&b.tx.id))
+            }),
+            SortKey::Age => v.sort_by(|a, b| {
+                a.first_seen_ms
+                    .cmp(&b.first_seen_ms)
+                    .then_with(|| a.tx.id.cmp(&b.tx.id))
+            }),
             SortKey::Origin => v.sort_by(|a, b| {
-                a.class.class.name.cmp(&b.class.class.name).then_with(|| a.tx.id.cmp(&b.tx.id))
+                a.class
+                    .class
+                    .name
+                    .cmp(&b.class.class.name)
+                    .then_with(|| a.tx.id.cmp(&b.tx.id))
             }),
         }
         v
@@ -266,7 +304,11 @@ impl App {
         let n = self.rows().len();
         self.selected = if n == 0 { 0 } else { self.selected.min(n - 1) };
         let s = self.rec.views().len();
-        self.source_sel = if s == 0 { 0 } else { self.source_sel.min(s - 1) };
+        self.source_sel = if s == 0 {
+            0
+        } else {
+            self.source_sel.min(s - 1)
+        };
     }
 
     pub fn best_info(&self) -> Option<&NodeInfo> {
@@ -291,14 +333,24 @@ impl App {
     }
 
     pub fn chain_height(&self) -> u32 {
-        let info = self.rec.views().iter().filter_map(|v| v.info.as_ref()).map(|i| i.full_height).max();
+        let info = self
+            .rec
+            .views()
+            .iter()
+            .filter_map(|v| v.info.as_ref())
+            .map(|i| i.full_height)
+            .max();
         let block = self.rec.recent_blocks().first().map(|b| b.height);
         info.into_iter().chain(block).max().unwrap_or(0)
     }
 
     pub fn active_label(&self) -> String {
         let views = self.rec.views();
-        match self.rec.active().and_then(|a| views.iter().find(|v| &v.id == a)) {
+        match self
+            .rec
+            .active()
+            .and_then(|a| views.iter().find(|v| &v.id == a))
+        {
             Some(v) if v.kind == SourceKind::Node => format!("{} (node)", v.id),
             Some(v) => format!("{} (explorer)", v.id),
             None => "none".into(),
@@ -307,14 +359,24 @@ impl App {
 
     pub fn source_summary(&self) -> String {
         let views = self.rec.views();
-        let lead = match self.rec.active().and_then(|a| views.iter().find(|v| &v.id == a)) {
+        let lead = match self
+            .rec
+            .active()
+            .and_then(|a| views.iter().find(|v| &v.id == a))
+        {
             Some(v) if v.kind == SourceKind::Node => format!("● {}", v.id),
             Some(v) => format!("○ explorer fallback: {}", v.id),
             None => "✕ no data source".to_string(),
         };
         let dots: Vec<String> = views
             .iter()
-            .map(|v| format!("{}{}", format::trunc(&v.id.0, 14), if v.status.usable() { "●" } else { "○" }))
+            .map(|v| {
+                format!(
+                    "{}{}",
+                    format::trunc(&v.id.0, 14),
+                    if v.status.usable() { "●" } else { "○" }
+                )
+            })
             .collect();
         format!(" {lead}  [{}]", dots.join(" "))
     }
@@ -337,7 +399,12 @@ impl App {
     }
 
     pub fn token_amount(&self, t: &Token) -> String {
-        match self.tokens.get(&t.token_id).map(|m| m.decimals).filter(|d| *d > 0) {
+        match self
+            .tokens
+            .get(&t.token_id)
+            .map(|m| m.decimals)
+            .filter(|d| *d > 0)
+        {
             Some(d) => format!("{:.*}", d as usize, t.amount as f64 / 10f64.powi(d as i32)),
             None => t.amount.to_string(),
         }
@@ -348,11 +415,19 @@ impl App {
     }
 
     pub fn tick(&mut self, now_ms: u64) -> bool {
-        let dt = if self.last_tick_ms == 0 { 0 } else { now_ms.saturating_sub(self.last_tick_ms).min(100) };
+        let dt = if self.last_tick_ms == 0 {
+            0
+        } else {
+            now_ms.saturating_sub(self.last_tick_ms).min(100)
+        };
         self.last_tick_ms = now_ms;
         let animating = self.viz.tick(dt, now_ms);
         let had_status = self.status.is_some();
-        if self.status.as_ref().is_some_and(|(_, until)| now_ms >= *until) {
+        if self
+            .status
+            .as_ref()
+            .is_some_and(|(_, until)| now_ms >= *until)
+        {
             self.status = None;
         }
         animating || had_status || now_ms < self.block_flash_until + 100
@@ -485,14 +560,20 @@ pub(crate) mod testkit {
     pub const KUCOIN: &str = "9fyeEQBXvJzRYpRmrNy2eaB2kDqQGDk3KoSQGUB62db3tVDw2Z1";
     pub const WALLET: &str = "9guaDYhHCxtfAdRTKr8xXaDuXtdB8gdGB7WwnB5zTBw93Ym3Rsq";
     pub const CONTRACT: &str = "4MQyMKvMbnCJG3aJ";
-    pub const POOL_2MINERS: &str = "88dhgzEuTXaRQTX5KNdnaWTTX7fEZVEQRn6qP4MJotPuRnS3QpoJxYpSaXoU1y7SHp8ZXMp92TH22DBY";
+    pub const POOL_2MINERS: &str =
+        "88dhgzEuTXaRQTX5KNdnaWTTX7fEZVEQRn6qP4MJotPuRnS3QpoJxYpSaXoU1y7SHp8ZXMp92TH22DBY";
 
     pub fn tid(prefix: &str) -> String {
         format!("{prefix}{}", "0".repeat(64 - prefix.len()))
     }
 
     fn bx(address: &str, value: u64) -> BoxData {
-        BoxData { box_id: format!("box-{address}-{value}"), value, address: address.into(), tokens: vec![] }
+        BoxData {
+            box_id: format!("box-{address}-{value}"),
+            value,
+            address: address.into(),
+            tokens: vec![],
+        }
     }
 
     fn tx(id: &str, size: u32, from: &str, outputs: Vec<BoxData>) -> Tx {
@@ -501,7 +582,10 @@ pub(crate) mod testkit {
         Tx {
             id: tid(id),
             size,
-            inputs: vec![Input { box_id: input.box_id.clone(), resolved: Some(input) }],
+            inputs: vec![Input {
+                box_id: input.box_id.clone(),
+                resolved: Some(input),
+            }],
             outputs,
             creation_ts_ms: None,
         }
@@ -509,18 +593,34 @@ pub(crate) mod testkit {
 
     pub fn specs() -> Vec<SourceSpec> {
         vec![
-            SourceSpec { id: SourceId("node-a".into()), kind: SourceKind::Node, url: "http://n:9053".into() },
-            SourceSpec { id: SourceId("p2p".into()), kind: SourceKind::Explorer, url: "https://p2p".into() },
+            SourceSpec {
+                id: SourceId("node-a".into()),
+                kind: SourceKind::Node,
+                url: "http://n:9053".into(),
+            },
+            SourceSpec {
+                id: SourceId("p2p".into()),
+                kind: SourceKind::Explorer,
+                url: "https://p2p".into(),
+            },
         ]
     }
 
     /// Four txs (fees: d4 > b2 > a1 > c3), a node and an explorer source, one block by 2Miners.
     pub fn sample_app() -> App {
         let fresh = tree_to_address(&format!("0008cd02{}", "33".repeat(32))).unwrap();
-        let mut app = App::new(&specs(), ergotop_core::config::AddressesFile::default(), &UiConfig::default());
+        let mut app = App::new(
+            &specs(),
+            ergotop_core::config::AddressesFile::default(),
+            &UiConfig::default(),
+        );
         app.resize_viz(60, 12);
         app.on_source_event(
-            SourceEvent::AddressBook(vec![BookEntry { address: KUCOIN.into(), name: "Kucoin".into(), kind: Kind::Exchange }]),
+            SourceEvent::AddressBook(vec![BookEntry {
+                address: KUCOIN.into(),
+                name: "Kucoin".into(),
+                kind: Kind::Exchange,
+            }]),
             NOW - 60_000,
         );
         app.on_source_event(
@@ -538,18 +638,48 @@ pub(crate) mod testkit {
             NOW - 60_000,
         );
         let txs = vec![
-            tx("a1", 412, KUCOIN, vec![bx(WALLET, 12_000_000_000), bx(FEE_ADDRESS, 1_500_000)]),
-            tx("b2", 2150, WALLET, vec![bx(CONTRACT, 5_000_000_000), bx(FEE_ADDRESS, 2_000_000)]),
-            tx("c3", 300, WALLET, vec![bx(&fresh, 1_000_000_000), bx(FEE_ADDRESS, 1_100_000)]),
-            tx("d4", 20_000, WALLET, vec![bx(CONTRACT, 100_000_000_000), bx(FEE_ADDRESS, 10_000_000)]),
+            tx(
+                "a1",
+                412,
+                KUCOIN,
+                vec![bx(WALLET, 12_000_000_000), bx(FEE_ADDRESS, 1_500_000)],
+            ),
+            tx(
+                "b2",
+                2150,
+                WALLET,
+                vec![bx(CONTRACT, 5_000_000_000), bx(FEE_ADDRESS, 2_000_000)],
+            ),
+            tx(
+                "c3",
+                300,
+                WALLET,
+                vec![bx(&fresh, 1_000_000_000), bx(FEE_ADDRESS, 1_100_000)],
+            ),
+            tx(
+                "d4",
+                20_000,
+                WALLET,
+                vec![bx(CONTRACT, 100_000_000_000), bx(FEE_ADDRESS, 10_000_000)],
+            ),
         ];
         let ids: Vec<String> = txs.iter().map(|t| t.id.clone()).collect();
         app.on_source_event(
-            SourceEvent::Mempool { source: SourceId("node-a".into()), ids: ids.clone(), new_txs: txs, latency_ms: 23 },
+            SourceEvent::Mempool {
+                source: SourceId("node-a".into()),
+                ids: ids.clone(),
+                new_txs: txs,
+                latency_ms: 23,
+            },
             NOW - 30_000,
         );
         app.on_source_event(
-            SourceEvent::Mempool { source: SourceId("p2p".into()), ids: ids[..2].to_vec(), new_txs: vec![], latency_ms: 900 },
+            SourceEvent::Mempool {
+                source: SourceId("p2p".into()),
+                ids: ids[..2].to_vec(),
+                new_txs: vec![],
+                latency_ms: 900,
+            },
             NOW - 20_000,
         );
         app.on_source_event(
@@ -584,7 +714,10 @@ mod tests {
     }
 
     fn ids(app: &App) -> Vec<String> {
-        app.rows().iter().map(|e| e.tx.id[..2].to_string()).collect()
+        app.rows()
+            .iter()
+            .map(|e| e.tx.id[..2].to_string())
+            .collect()
     }
 
     #[test]
@@ -635,7 +768,13 @@ mod tests {
         app.on_key(key(KeyCode::Char('t')), NOW);
         assert_ne!(app.theme.name, before);
         assert_eq!(app.on_key(key(KeyCode::Char('q')), NOW), Action::Quit);
-        assert_eq!(app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL), NOW), Action::Quit);
+        assert_eq!(
+            app.on_key(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                NOW
+            ),
+            Action::Quit
+        );
     }
 
     #[test]
@@ -675,21 +814,34 @@ mod tests {
     #[test]
     fn copy_and_open_act_on_selected_tx() {
         let mut app = sample_app();
-        assert_eq!(app.on_key(key(KeyCode::Char('c')), NOW), Action::Copy(tid("d4")));
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('c')), NOW),
+            Action::Copy(tid("d4"))
+        );
         assert!(app.status.as_ref().unwrap().0.starts_with("Copied"));
         assert_eq!(
             app.on_key(key(KeyCode::Char('e')), NOW),
-            Action::Open(format!("https://explorer.ergoplatform.com/en/transactions/{}", tid("d4")))
+            Action::Open(format!(
+                "https://explorer.ergoplatform.com/en/transactions/{}",
+                tid("d4")
+            ))
         );
         app.on_key(key(KeyCode::Enter), NOW);
         assert_eq!(app.overlay, Overlay::Detail);
-        assert_eq!(app.on_key(key(KeyCode::Char('c')), NOW), Action::Copy(tid("d4")));
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('c')), NOW),
+            Action::Copy(tid("d4"))
+        );
     }
 
     #[test]
     fn key_releases_are_ignored() {
         let mut app = sample_app();
-        let release = KeyEvent::new_with_kind(KeyCode::Char('s'), KeyModifiers::NONE, KeyEventKind::Release);
+        let release = KeyEvent::new_with_kind(
+            KeyCode::Char('s'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
         app.on_key(release, NOW);
         assert_eq!(app.sort, SortKey::Fee);
     }
@@ -724,10 +876,19 @@ mod tests {
             NOW,
         );
         assert!(app.block_flash_until > NOW);
-        assert!(app.banner.as_deref().unwrap().contains("Block #1,886,102 by 2Miners"));
+        assert!(app
+            .banner
+            .as_deref()
+            .unwrap()
+            .contains("Block #1,886,102 by 2Miners"));
         let remaining: Vec<String> = [tid("b2"), tid("c3"), tid("d4")].to_vec();
         app.on_source_event(
-            SourceEvent::Mempool { source: SourceId("node-a".into()), ids: remaining, new_txs: vec![], latency_ms: 20 },
+            SourceEvent::Mempool {
+                source: SourceId("node-a".into()),
+                ids: remaining,
+                new_txs: vec![],
+                latency_ms: 20,
+            },
             NOW + 1_000,
         );
         assert!(app.viz.sprite(&tid("a1")).is_none());
@@ -750,11 +911,27 @@ mod tests {
         assert_eq!(app.address_label(FEE_ADDRESS), "fee");
         assert_eq!(app.address_label(WALLET), "9guaDYhH…Ym3Rsq");
         app.on_source_event(
-            SourceEvent::TokenMeta(TokenMeta { token_id: "tok".into(), name: Some("SigUSD".into()), decimals: 2 }),
+            SourceEvent::TokenMeta(TokenMeta {
+                token_id: "tok".into(),
+                name: Some("SigUSD".into()),
+                decimals: 2,
+            }),
             NOW,
         );
         assert_eq!(app.token_name("tok"), "SigUSD");
-        assert_eq!(app.token_amount(&Token { token_id: "tok".into(), amount: 12345 }), "123.45");
-        assert_eq!(app.token_amount(&Token { token_id: "other".into(), amount: 7 }), "7");
+        assert_eq!(
+            app.token_amount(&Token {
+                token_id: "tok".into(),
+                amount: 12345
+            }),
+            "123.45"
+        );
+        assert_eq!(
+            app.token_amount(&Token {
+                token_id: "other".into(),
+                amount: 7
+            }),
+            "7"
+        );
     }
 }

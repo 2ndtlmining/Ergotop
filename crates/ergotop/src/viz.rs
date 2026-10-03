@@ -105,7 +105,11 @@ impl Visualizer {
     pub fn relayout(&mut self, items: &[VizItem], capacity: u32, animate: bool) {
         let pack_items: Vec<PackItem> = items
             .iter()
-            .map(|i| PackItem { id: i.id.clone(), size_bytes: i.size_bytes, fee: i.fee })
+            .map(|i| PackItem {
+                id: i.id.clone(),
+                size_bytes: i.size_bytes,
+                fee: i.fee,
+            })
             .collect();
         let colors: HashMap<&str, Color> = items.iter().map(|i| (i.id.as_str(), i.color)).collect();
         let result = pack(&pack_items, &self.params(capacity));
@@ -122,18 +126,30 @@ impl Visualizer {
                     if !animate {
                         s.y = p.y as f32;
                     }
-                    s.phase = if s.y == p.y as f32 { Phase::Resting } else { Phase::Moving };
+                    s.phase = if s.y == p.y as f32 {
+                        Phase::Resting
+                    } else {
+                        Phase::Moving
+                    };
                     s
                 }
                 None => Sprite {
                     id: p.id.clone(),
                     x: p.x,
-                    y: if animate { self.height as f32 } else { p.y as f32 },
+                    y: if animate {
+                        self.height as f32
+                    } else {
+                        p.y as f32
+                    },
                     target_y: p.y,
                     side: p.side,
                     color,
                     region: p.region,
-                    phase: if animate { Phase::Moving } else { Phase::Resting },
+                    phase: if animate {
+                        Phase::Moving
+                    } else {
+                        Phase::Resting
+                    },
                 },
             };
             next.insert(p.id.clone(), sprite);
@@ -145,7 +161,9 @@ impl Visualizer {
     pub fn on_mined(&mut self, ids: &[TxId], now_ms: u64) {
         for id in ids {
             if let Some(mut s) = self.sprites.remove(id) {
-                s.phase = Phase::Flashing { until_ms: now_ms + FLASH_MS };
+                s.phase = Phase::Flashing {
+                    until_ms: now_ms + FLASH_MS,
+                };
                 self.leaving.push(s);
             }
         }
@@ -207,7 +225,12 @@ mod tests {
     const RED: Color = Color::Rgb(200, 0, 0);
 
     fn item(id: &str, size: u32, fee: u64) -> VizItem {
-        VizItem { id: id.into(), size_bytes: size, fee, color: RED }
+        VizItem {
+            id: id.into(),
+            size_bytes: size,
+            fee,
+            color: RED,
+        }
     }
 
     #[test]
@@ -254,7 +277,11 @@ mod tests {
     fn dropped_txs_disappear_on_relayout() {
         let mut v = Visualizer::new();
         v.set_size(20, 20);
-        v.relayout(&[item("a", 1000, 10), item("b", 1000, 10)], 1_000_000, false);
+        v.relayout(
+            &[item("a", 1000, 10), item("b", 1000, 10)],
+            1_000_000,
+            false,
+        );
         v.relayout(&[item("b", 1000, 10)], 1_000_000, false);
         assert!(v.sprite("a").is_none());
         assert!(v.sprite("b").is_some());

@@ -4,5 +4,6 @@ pub mod canvas;
 pub mod format;
 pub mod headless;
 pub mod theme;
+pub mod tui;
 pub mod ui;
 pub mod viz;

@@ -11,13 +11,22 @@ use crate::format;
 use crate::theme::rgb;
 
 pub fn draw(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
-    let [left, center, right] =
-        Layout::horizontal([Constraint::Length(33), Constraint::Min(40), Constraint::Length(36)]).areas(area);
-    let [summary_area, blocks_area] = Layout::vertical([Constraint::Length(10), Constraint::Min(0)]).areas(left);
+    let [left, center, right] = Layout::horizontal([
+        Constraint::Length(33),
+        Constraint::Min(40),
+        Constraint::Length(36),
+    ])
+    .areas(area);
+    let [summary_area, blocks_area] =
+        Layout::vertical([Constraint::Length(10), Constraint::Min(0)]).areas(left);
     let [viz_area, table_area] =
         Layout::vertical([Constraint::Percentage(40), Constraint::Min(0)]).areas(center);
-    let [net_area, origin_area, detail_area] =
-        Layout::vertical([Constraint::Length(9), Constraint::Length(10), Constraint::Min(0)]).areas(right);
+    let [net_area, origin_area, detail_area] = Layout::vertical([
+        Constraint::Length(9),
+        Constraint::Length(10),
+        Constraint::Min(0),
+    ])
+    .areas(right);
     summary(f, summary_area, app, now_ms);
     blocks(f, blocks_area, app, now_ms);
     super::packing::viz_panel(f, viz_area, app, now_ms);
@@ -49,17 +58,40 @@ fn summary(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
             Span::styled(bar(pct, width), Style::new().fg(util_color(pct, &t))),
             Span::raw(format!(" {pct}%")),
         ]),
-        Line::from(format!("{} / {}", format::bytes(bytes), format::bytes(app.max_block_size() as u64))),
+        Line::from(format!(
+            "{} / {}",
+            format::bytes(bytes),
+            format::bytes(app.max_block_size() as u64)
+        )),
         kv("Total fees", format!("{} ERG", format::fee(fees))),
-        kv("Avg fee", dash((n > 0).then(|| format!("{} ERG", format::fee(fees / n))))),
+        kv(
+            "Avg fee",
+            dash((n > 0).then(|| format!("{} ERG", format::fee(fees / n)))),
+        ),
         kv("Avg size", dash((n > 0).then(|| format::bytes(bytes / n)))),
-        kv("Largest", dash(pool.iter().map(|e| e.tx.size as u64).max().map(format::bytes))),
+        kv(
+            "Largest",
+            dash(
+                pool.iter()
+                    .map(|e| e.tx.size as u64)
+                    .max()
+                    .map(format::bytes),
+            ),
+        ),
         kv(
             "Oldest",
-            dash(pool.iter().map(|e| e.first_seen_ms).min().map(|s| format::age(now_ms.saturating_sub(s)))),
+            dash(
+                pool.iter()
+                    .map(|e| e.first_seen_ms)
+                    .min()
+                    .map(|s| format::age(now_ms.saturating_sub(s))),
+            ),
         ),
     ];
-    f.render_widget(Paragraph::new(lines).block(panel("MEMPOOL".into(), &t)), area);
+    f.render_widget(
+        Paragraph::new(lines).block(panel("MEMPOOL".into(), &t)),
+        area,
+    );
 }
 
 fn blocks(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
@@ -77,7 +109,10 @@ fn blocks(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
             ))
         })
         .collect();
-    f.render_widget(Paragraph::new(lines).block(panel("RECENT BLOCKS".into(), &app.theme)), area);
+    f.render_widget(
+        Paragraph::new(lines).block(panel("RECENT BLOCKS".into(), &app.theme)),
+        area,
+    );
 }
 
 fn tx_table(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
@@ -87,7 +122,11 @@ fn tx_table(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
         "TRANSACTIONS {} · sort:{}{}",
         rows.len(),
         app.sort.label(),
-        if app.filter.is_empty() { String::new() } else { format!(" · /{}", app.filter) }
+        if app.filter.is_empty() {
+            String::new()
+        } else {
+            format!(" · /{}", app.filter)
+        }
     );
     let block = panel(title, &t);
     if area.height < 4 {
@@ -108,7 +147,11 @@ fn tx_table(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
                     Span::raw(format::trunc(&e.class.class.name, 12)),
                 ])),
                 Cell::from(format::fee(e.metrics.fee)),
-                Cell::from(format!("{}{}", format::erg(e.metrics.value), if e.metrics.approx { "~" } else { "" })),
+                Cell::from(format!(
+                    "{}{}",
+                    format::erg(e.metrics.value),
+                    if e.metrics.approx { "~" } else { "" }
+                )),
                 Cell::from(format::bytes(e.tx.size as u64)),
                 Cell::from(format::age(now_ms.saturating_sub(e.first_seen_ms))),
             ])
@@ -144,14 +187,20 @@ fn network(f: &mut Frame, area: Rect, app: &App) {
             lines.push(kv("Node", i.app_version.clone()));
             lines.push(kv(
                 "Index lag",
-                dash(i.indexed_height.map(|h| i.full_height.saturating_sub(h).to_string())),
+                dash(
+                    i.indexed_height
+                        .map(|h| i.full_height.saturating_sub(h).to_string()),
+                ),
             ));
         }
         None => lines.push(kv("Node", "no node data".into())),
     }
     lines.push(kv("Max block", format::bytes(app.max_block_size() as u64)));
     lines.push(kv("Mempool", format!("{} tx", app.rec.pool().len())));
-    f.render_widget(Paragraph::new(lines).block(panel("NETWORK".into(), &app.theme)), area);
+    f.render_widget(
+        Paragraph::new(lines).block(panel("NETWORK".into(), &app.theme)),
+        area,
+    );
 }
 
 fn origins(f: &mut Frame, area: Rect, app: &App) {
@@ -171,7 +220,10 @@ fn origins(f: &mut Frame, area: Rect, app: &App) {
             ])
         })
         .collect();
-    f.render_widget(Paragraph::new(lines).block(panel("ORIGINS".into(), &app.theme)), area);
+    f.render_widget(
+        Paragraph::new(lines).block(panel("ORIGINS".into(), &app.theme)),
+        area,
+    );
 }
 
 fn selected(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
@@ -184,14 +236,37 @@ fn selected(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
             kv("Fee", format!("{} ERG", format::fee(e.metrics.fee))),
             kv(
                 "Value",
-                format!("{} ERG{}", format::erg(e.metrics.value), if e.metrics.approx { " ~" } else { "" }),
+                format!(
+                    "{} ERG{}",
+                    format::erg(e.metrics.value),
+                    if e.metrics.approx { " ~" } else { "" }
+                ),
             ),
             kv("Size", format::bytes(e.tx.size as u64)),
-            kv("Seen", format!("{} ago", format::age(now_ms.saturating_sub(e.first_seen_ms)))),
-            kv("Sources", e.seen_by.iter().map(|s| s.0.as_str()).collect::<Vec<_>>().join(", ")),
-            kv("In / Out", format!("{} / {}", e.tx.inputs.len(), e.tx.outputs.len())),
+            kv(
+                "Seen",
+                format!(
+                    "{} ago",
+                    format::age(now_ms.saturating_sub(e.first_seen_ms))
+                ),
+            ),
+            kv(
+                "Sources",
+                e.seen_by
+                    .iter()
+                    .map(|s| s.0.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            kv(
+                "In / Out",
+                format!("{} / {}", e.tx.inputs.len(), e.tx.outputs.len()),
+            ),
             Line::from(Span::styled("Enter: full detail", Style::new().fg(t.dim))),
         ],
     };
-    f.render_widget(Paragraph::new(lines).block(panel("SELECTED".into(), &t)), area);
+    f.render_widget(
+        Paragraph::new(lines).block(panel("SELECTED".into(), &t)),
+        area,
+    );
 }

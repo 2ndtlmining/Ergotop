@@ -89,7 +89,10 @@ mod tests {
         assert_eq!(thousands(1_886_101), "1,886,101");
         assert_eq!(thousands(999), "999");
         assert_eq!(short_id("abcdef0123456789"), "abcdef01");
-        assert_eq!(short_addr("9guaDYhHCxtfAdRTKr8xXaDuXtdB8gdGB7WwnB5zTBw93Ym3Rsq"), "9guaDYhH…Ym3Rsq");
+        assert_eq!(
+            short_addr("9guaDYhHCxtfAdRTKr8xXaDuXtdB8gdGB7WwnB5zTBw93Ym3Rsq"),
+            "9guaDYhH…Ym3Rsq"
+        );
         assert_eq!(short_addr("4MQyMKvMbnCJG3aJ"), "4MQyMKvMbnCJG3aJ");
         assert_eq!(trunc("Rosen Bridge", 5), "Rosen");
     }

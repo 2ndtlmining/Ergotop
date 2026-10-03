@@ -11,7 +11,11 @@ pub struct Canvas {
 
 impl Canvas {
     pub fn new(width: u16, height: u16) -> Self {
-        Canvas { width, height, px: vec![None; width as usize * height as usize] }
+        Canvas {
+            width,
+            height,
+            px: vec![None; width as usize * height as usize],
+        }
     }
 
     pub fn width(&self) -> u16 {

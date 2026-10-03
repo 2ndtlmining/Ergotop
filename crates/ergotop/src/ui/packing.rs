@@ -38,7 +38,8 @@ pub fn viz_panel(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
     if inner.width == 0 || inner.height < 2 {
         return;
     }
-    let [canvas_area, legend_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let [canvas_area, legend_area] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
     app.resize_viz(canvas_area.width, canvas_area.height);
     let mut canvas = Canvas::new(canvas_area.width, canvas_area.height * 2);
     app.viz.render(&mut canvas, now_ms, t.dim);
@@ -48,5 +49,8 @@ pub fn viz_panel(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
         spans.push(Span::styled("■ ", Style::new().fg(rgb(color))));
         spans.push(Span::raw(format!("{} {n}  ", format::trunc(&name, 14))));
     }
-    f.render_widget(Paragraph::new(Line::from(spans)).style(Style::new().fg(t.dim)), legend_area);
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::new().fg(t.dim)),
+        legend_area,
+    );
 }

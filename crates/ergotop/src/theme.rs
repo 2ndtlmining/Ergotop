@@ -44,15 +44,51 @@ const fn theme(
 }
 
 pub const THEMES: [Theme; 4] = [
-    theme("neon-green", 0x0a0e0f, 0x0c1213, 0x39ff14, 0x00ffcc, 0xffb000, 0xff4444, 0x4a7a4a, 0x1a3a1a),
-    theme("amber-terminal", 0x0f0c06, 0x12100a, 0xffb000, 0xffd700, 0xff6600, 0xff4444, 0x7a6a3a, 0x3a2a0a),
-    theme("blue-ice", 0x0a0e14, 0x0c1218, 0x4fc3f7, 0x80deea, 0xffb74d, 0xef5350, 0x37474f, 0x1a2a3a),
-    theme("high-contrast", 0x000000, 0x0a0a0a, 0xffffff, 0x00ffff, 0xffff00, 0xff0000, 0x666666, 0x333333),
+    theme(
+        "neon-green",
+        0x0a0e0f,
+        0x0c1213,
+        0x39ff14,
+        0x00ffcc,
+        0xffb000,
+        0xff4444,
+        0x4a7a4a,
+        0x1a3a1a,
+    ),
+    theme(
+        "amber-terminal",
+        0x0f0c06,
+        0x12100a,
+        0xffb000,
+        0xffd700,
+        0xff6600,
+        0xff4444,
+        0x7a6a3a,
+        0x3a2a0a,
+    ),
+    theme(
+        "blue-ice", 0x0a0e14, 0x0c1218, 0x4fc3f7, 0x80deea, 0xffb74d, 0xef5350, 0x37474f, 0x1a2a3a,
+    ),
+    theme(
+        "high-contrast",
+        0x000000,
+        0x0a0a0a,
+        0xffffff,
+        0x00ffff,
+        0xffff00,
+        0xff0000,
+        0x666666,
+        0x333333,
+    ),
 ];
 
 impl Theme {
     pub fn by_name(name: &str) -> Theme {
-        THEMES.iter().copied().find(|t| t.name == name).unwrap_or(THEMES[0])
+        THEMES
+            .iter()
+            .copied()
+            .find(|t| t.name == name)
+            .unwrap_or(THEMES[0])
     }
 
     pub fn next(&self) -> Theme {
@@ -79,12 +115,21 @@ mod tests {
             t = t.next();
             names.push(t.name);
         }
-        assert_eq!(names, vec!["amber-terminal", "blue-ice", "high-contrast", "neon-green"]);
+        assert_eq!(
+            names,
+            vec!["amber-terminal", "blue-ice", "high-contrast", "neon-green"]
+        );
     }
 
     #[test]
     fn converts_classification_colors() {
-        assert_eq!(rgb(ergotop_core::classify::Rgb(1, 2, 3)), Color::Rgb(1, 2, 3));
-        assert_eq!(Theme::by_name("neon-green").primary, Color::Rgb(0x39, 0xff, 0x14));
+        assert_eq!(
+            rgb(ergotop_core::classify::Rgb(1, 2, 3)),
+            Color::Rgb(1, 2, 3)
+        );
+        assert_eq!(
+            Theme::by_name("neon-green").primary,
+            Color::Rgb(0x39, 0xff, 0x14)
+        );
     }
 }

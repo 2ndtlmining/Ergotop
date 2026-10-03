@@ -23,8 +23,12 @@ const HINTS: &str = " 1 2 3 views  / filter  s sort  c copy  e explorer  ? help 
 pub fn draw(f: &mut Frame, app: &mut App, now_ms: u64) {
     let area = f.area();
     f.render_widget(Block::new().style(Style::new().bg(app.theme.bg)), area);
-    let [head, body, foot] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(area);
+    let [head, body, foot] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(area);
     header(f, head, app, now_ms);
     match app.view {
         View::Dashboard => dashboard::draw(f, body, app, now_ms),
@@ -41,7 +45,10 @@ pub fn draw(f: &mut Frame, app: &mut App, now_ms: u64) {
 
 pub(crate) fn panel(title: String, theme: &Theme) -> Block<'static> {
     Block::bordered()
-        .title(Span::styled(format!(" {title} "), Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::new().fg(theme.accent).add_modifier(Modifier::BOLD),
+        ))
         .border_style(Style::new().fg(theme.dim))
         .style(Style::new().bg(theme.panel_bg).fg(theme.primary))
 }
@@ -83,22 +90,47 @@ fn header(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
     let t = app.theme;
     if now_ms < app.block_flash_until {
         if let Some(b) = &app.banner {
-            let style = Style::new().bg(t.accent).fg(t.bg).add_modifier(Modifier::BOLD);
+            let style = Style::new()
+                .bg(t.accent)
+                .fg(t.bg)
+                .add_modifier(Modifier::BOLD);
             f.render_widget(Paragraph::new(format!(" {b} ")).style(style), area);
             return;
         }
     }
     let pool_bytes: u64 = app.rec.pool().values().map(|e| e.tx.size as u64).sum();
     let pct = app.utilization_pct();
-    let price = app.price.map(|p| format!("${p:.4}")).unwrap_or_else(|| "-".into());
+    let price = app
+        .price
+        .map(|p| format!("${p:.4}"))
+        .unwrap_or_else(|| "-".into());
     let line = Line::from(vec![
-        Span::styled(" ERGOTOP ", Style::new().fg(t.bg).bg(t.primary).add_modifier(Modifier::BOLD)),
-        Span::raw(format!("  Block #{}  ", format::thousands(app.chain_height() as u64))),
+        Span::styled(
+            " ERGOTOP ",
+            Style::new()
+                .fg(t.bg)
+                .bg(t.primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(
+            "  Block #{}  ",
+            format::thousands(app.chain_height() as u64)
+        )),
         Span::raw(format!("ERG {price}  ")),
-        Span::raw(format!("{} tx · {}  ", app.rec.pool().len(), format::bytes(pool_bytes))),
-        Span::styled(format!("mempool {pct}% of block"), Style::new().fg(util_color(pct, &t))),
+        Span::raw(format!(
+            "{} tx · {}  ",
+            app.rec.pool().len(),
+            format::bytes(pool_bytes)
+        )),
+        Span::styled(
+            format!("mempool {pct}% of block"),
+            Style::new().fg(util_color(pct, &t)),
+        ),
     ]);
-    f.render_widget(Paragraph::new(line).style(Style::new().bg(t.panel_bg).fg(t.primary)), area);
+    f.render_widget(
+        Paragraph::new(line).style(Style::new().bg(t.panel_bg).fg(t.primary)),
+        area,
+    );
 }
 
 fn status_bar(f: &mut Frame, area: Rect, app: &App) {
@@ -112,8 +144,14 @@ fn status_bar(f: &mut Frame, area: Rect, app: &App) {
     };
     let hint_w = (HINTS.chars().count() as u16).min(area.width.saturating_sub(30));
     let [l, r] = Layout::horizontal([Constraint::Min(0), Constraint::Length(hint_w)]).areas(area);
-    f.render_widget(Paragraph::new(left).style(Style::new().bg(t.panel_bg).fg(t.primary)), l);
-    f.render_widget(Paragraph::new(HINTS).style(Style::new().bg(t.panel_bg).fg(t.dim)), r);
+    f.render_widget(
+        Paragraph::new(left).style(Style::new().bg(t.panel_bg).fg(t.primary)),
+        l,
+    );
+    f.render_widget(
+        Paragraph::new(HINTS).style(Style::new().bg(t.panel_bg).fg(t.dim)),
+        r,
+    );
 }
 
 #[cfg(test)]
@@ -212,7 +250,17 @@ pub(crate) mod tests {
         let mut app = sample_app();
         app.view = View::Sources;
         let s = screen(&mut app, 130, 30);
-        assert_contains(&s, &["SOURCES", "* node-a", "p2p", "Only here", "explorer", "6.0.1"]);
+        assert_contains(
+            &s,
+            &[
+                "SOURCES",
+                "* node-a",
+                "p2p",
+                "Only here",
+                "explorer",
+                "6.0.1",
+            ],
+        );
         insta::assert_snapshot!("sources", s);
     }
 
@@ -242,17 +290,36 @@ pub(crate) mod tests {
         let s = screen(&mut app, 120, 34);
         assert_contains(
             &s,
-            &["TRANSACTION", "a1000000", "Kucoin", "INPUTS (1)", "OUTPUTS (2)", "fee", "12.00", "c: copy id"],
+            &[
+                "TRANSACTION",
+                "a1000000",
+                "Kucoin",
+                "INPUTS (1)",
+                "OUTPUTS (2)",
+                "fee",
+                "12.00",
+                "c: copy id",
+            ],
         );
-        let fee_line = s.lines().find(|l| l.contains("│  fee ")).expect("fee output line");
-        assert!(fee_line.contains("0.0015 ERG"), "small outputs must not round to zero: {fee_line}");
+        let fee_line = s
+            .lines()
+            .find(|l| l.contains("│  fee "))
+            .expect("fee output line");
+        assert!(
+            fee_line.contains("0.0015 ERG"),
+            "small outputs must not round to zero: {fee_line}"
+        );
         insta::assert_snapshot!("detail", s);
     }
 
     #[test]
     fn tiny_terminal_never_panics() {
         for view in [View::Dashboard, View::Packing, View::Sources] {
-            for overlay in [crate::app::Overlay::None, crate::app::Overlay::Help, crate::app::Overlay::Detail] {
+            for overlay in [
+                crate::app::Overlay::None,
+                crate::app::Overlay::Help,
+                crate::app::Overlay::Detail,
+            ] {
                 let mut app = sample_app();
                 app.view = view;
                 app.overlay = overlay;
