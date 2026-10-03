@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm # glibc 2.35 baseline: runs on Debian 12 / Raspberry Pi OS bookworm
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Refresh address-book snapshot
+        shell: bash
+        run: bash scripts/refresh-addressbook.sh
+      - name: Verify snapshot parses (fall back to the committed one)
+        shell: bash
+        run: |
+          if ! cargo test --locked -q -p ergotop-core --lib addressbook; then
+            echo "refreshed address book does not parse; using the committed snapshot"
+            git checkout -- assets/addressbook-snapshot.json
+          fi
+      - name: Build
+        run: cargo build --release --locked -p ergotop --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME}"
+          if [[ "$GITHUB_REF" != refs/tags/* ]]; then version="dev-${GITHUB_SHA::7}"; fi
+          name="ergotop-${version}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp README.md LICENSE "dist/$name/"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "target/${{ matrix.target }}/release/ergotop.exe" "dist/$name/"
+            (cd dist && 7z a "$name.zip" "$name" > /dev/null)
+          else
+            cp "target/${{ matrix.target }}/release/ergotop" "dist/$name/"
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+          fi
+          rm -rf "dist/$name"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ergotop-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "Ergotop $GITHUB_REF_NAME" --generate-notes

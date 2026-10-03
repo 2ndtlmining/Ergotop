@@ -401,7 +401,13 @@ impl App {
         {
             Some(v) if v.kind == SourceKind::Node => format!("● {}", v.id),
             Some(v) => format!("○ explorer fallback: {}", v.id),
-            None => "✕ no data source".to_string(),
+            None if views
+                .iter()
+                .any(|v| v.status == ergotop_core::model::SourceStatus::Unknown) =>
+            {
+                "… connecting to sources".to_string()
+            }
+            None => "✕ no data source (press 3 for details)".to_string(),
         };
         let dots: Vec<String> = views
             .iter()
@@ -939,7 +945,31 @@ mod tests {
         assert_eq!(sample_app().max_block_size(), 1_271_009);
         let app = App::new(&specs(), Default::default(), &Default::default());
         assert_eq!(app.max_block_size(), DEFAULT_MAX_BLOCK_SIZE);
-        assert!(app.source_summary().contains("no data source"));
+        assert!(
+            app.source_summary().contains("connecting"),
+            "{}",
+            app.source_summary()
+        );
+    }
+
+    #[test]
+    fn status_says_no_data_source_only_after_every_source_failed() {
+        let mut app = App::new(&specs(), Default::default(), &Default::default());
+        for id in ["node-a", "p2p"] {
+            let down = ergotop_core::model::SourceStatus::Down("timeout".into());
+            app.on_source_event(
+                SourceEvent::Status {
+                    source: SourceId(id.into()),
+                    status: down,
+                },
+                NOW,
+            );
+        }
+        assert!(
+            app.source_summary().contains("no data source"),
+            "{}",
+            app.source_summary()
+        );
     }
 
     #[test]

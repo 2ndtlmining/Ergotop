@@ -1,16 +1,21 @@
+# Rust build output
+/target
+
+# Local agent workspace
+/.superpowers
+.claude/
+
+# Logs (e.g. ergotop --log)
+*.log
+
+# Secrets and leftovers from the Python version
+.env
 __pycache__/
 *.py[cod]
-*$py.class
-*.egg-info/
-dist/
-.eggs/
-*.egg
 .venv/
-venv/
-env/
-.env
-*.log
-.claude/
-test_visualizer.py
-/.superpowers
-/target
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
