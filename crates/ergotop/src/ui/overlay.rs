@@ -13,7 +13,7 @@ const KEYS: [(&str, &str); 13] = [
     ("1 2 3", "Dashboard / Packing / Sources"),
     ("↑ ↓ PgUp PgDn", "Move selection"),
     ("Enter", "Transaction detail (Sources: txs only in source)"),
-    ("s", "Cycle sort: fee → value → size → age → origin"),
+    ("s", "Cycle sort: rate → fee → value → size → age → origin"),
     ("/", "Filter: name, kind, tx id, >ERG, <ERG"),
     ("Esc", "Clear filter / close"),
     ("c", "Copy tx id (Sources: source URL)"),
@@ -63,6 +63,13 @@ pub fn detail(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
             format!("{} ({})", origin_text(e), e.class.class.kind.label()),
         ),
         kv("Fee", format!("{} ERG", format::fee(e.metrics.fee))),
+        kv(
+            "Fee rate",
+            format!(
+                "{} n/B",
+                format::rate(ergotop_core::metrics::fee_rate(e.metrics.fee, e.tx.size))
+            ),
+        ),
         kv(
             "Value",
             format!(

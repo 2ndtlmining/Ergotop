@@ -9,9 +9,10 @@ expression: s
 │        │ID          a100000000000000000000000000000000000000000000000000000000000000                        │        │
 │        │Origin      Kucoin (Exchange)                                                                       │        │
 │        │Fee         0.0015 ERG                                                                              │        │
+│        │Fee rate    3,640 n/B                                                                               │        │
 │        │Value       12.00 ERG                                                                               │        │
-│        │Size        412 B                                                                                   │        │
-│▀ ▀ ▀ ▀ │Seen        30s ago by node-a, p2p                                                                  │▀ ▀ ▀ ▀ │
+│▀ ▀ ▀ ▀ │Size        412 B                                                                                   │▀ ▀ ▀ ▀ │
+│        │Seen        30s ago by node-a, p2p                                                                  │        │
 │        │                                                                                                    │        │
 │        │INPUTS (1)                                                                                          │        │
 │        │  Kucoin                            12.0015 ERG                                                     │        │
@@ -21,7 +22,6 @@ expression: s
 │        │  fee                                0.0015 ERG                                                     │        │
 │        │                                                                                                    │        │
 │        │c: copy id · e: open in explorer · Esc: close                                                       │        │
-│        │                                                                                                    │        │
 │        │                                                                                                    │        │
 │        │                                                                                                    │        │
 │        │                                                                                                    │        │

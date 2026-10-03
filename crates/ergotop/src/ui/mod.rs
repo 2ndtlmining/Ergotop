@@ -183,6 +183,29 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn dashboard_shows_fee_rates_usd_and_whales() {
+        let mut app = sample_app();
+        app.view = View::Dashboard;
+        let s = screen(&mut app, 140, 40);
+        assert_contains(
+            &s,
+            &[
+                "Rate",
+                "3,666",
+                "Rate p50/90 930 / 3,666 n/B",
+                "To get in   any fee",
+                "0.0146 ERG (<$0.01)",
+                "1.00 ERG ($0.33)",
+            ],
+        );
+        assert!(!s.contains("WHALE"));
+        app.whale_nano = 50_000_000_000;
+        app.sort = crate::app::SortKey::Value;
+        let s = screen(&mut app, 140, 40);
+        assert_contains(&s, &["WHALE ≥ 50 ERG", "100.00 ERG ($32.62)"]);
+    }
+
+    #[test]
     fn dashboard_shows_all_panels() {
         let mut app = sample_app();
         app.view = View::Dashboard;

@@ -5,8 +5,30 @@ pub fn erg(nano: u64) -> String {
     format!("{:.2}", nano_to_erg(nano))
 }
 
+/// Whole ERG with thousands separators.
+pub fn erg_whole(nano: u64) -> String {
+    thousands(nano / 1_000_000_000)
+}
+
 pub fn fee(nano: u64) -> String {
     format!("{:.4}", nano_to_erg(nano))
+}
+
+/// Fee rate in nanoERG per byte, with thousands separators.
+pub fn rate(nano_per_byte: u64) -> String {
+    thousands(nano_per_byte)
+}
+
+pub fn usd(v: f64) -> String {
+    if v >= 1e6 {
+        format!("${:.1}M", v / 1e6)
+    } else if v >= 1e3 {
+        format!("${:.1}k", v / 1e3)
+    } else if v > 0.0 && v < 0.01 {
+        "<$0.01".into()
+    } else {
+        format!("${v:.2}")
+    }
 }
 
 pub fn bytes(n: u64) -> String {
@@ -68,6 +90,17 @@ mod tests {
     fn formats_amounts() {
         assert_eq!(erg(11_887_500_000), "11.89");
         assert_eq!(fee(1_500_000), "0.0015");
+        assert_eq!(erg_whole(10_000_400_000_000), "10,000");
+    }
+
+    #[test]
+    fn formats_rates_and_usd() {
+        assert_eq!(rate(3_666), "3,666");
+        assert_eq!(usd(0.0123), "$0.01");
+        assert_eq!(usd(0.004), "<$0.01");
+        assert_eq!(usd(12.5), "$12.50");
+        assert_eq!(usd(1_234.0), "$1.2k");
+        assert_eq!(usd(3_400_000.0), "$3.4M");
     }
 
     #[test]

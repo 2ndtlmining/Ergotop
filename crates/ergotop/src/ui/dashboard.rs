@@ -9,6 +9,8 @@ use super::{kv, origin_counts, origin_text, panel, util_color};
 use crate::app::App;
 use crate::format;
 use crate::theme::rgb;
+use ergotop_core::metrics::fee_rate;
+use ergotop_core::model::nano_to_erg;
 use ergotop_core::reconcile::TxEntry;
 
 pub fn draw(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
@@ -48,6 +50,13 @@ fn dash(v: Option<String>) -> String {
     v.unwrap_or_else(|| "-".into())
 }
 
+/// " ($1.23)" when the ERG price is known, else nothing.
+fn usd_suffix(app: &App, nano: u64) -> String {
+    app.price
+        .map(|p| format!(" ({})", format::usd(nano_to_erg(nano) * p)))
+        .unwrap_or_default()
+}
+
 fn summary(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
     let t = app.theme;
     let pool: Vec<_> = app.rec.pool().values().collect();
@@ -55,6 +64,7 @@ fn summary(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
     let bytes: u64 = pool.iter().map(|e| e.tx.size as u64).sum();
     let fees: u64 = pool.iter().map(|e| e.metrics.fee).sum();
     let pct = app.utilization_pct();
+    let stats = app.rate_stats();
     let width = area.width.saturating_sub(9) as usize;
     let lines = vec![
         Line::from(vec![
@@ -66,10 +76,22 @@ fn summary(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
             format::bytes(bytes),
             format::bytes(app.max_block_size() as u64)
         )),
-        kv("Total fees", format!("{} ERG", format::fee(fees))),
         kv(
-            "Avg fee",
-            dash((n > 0).then(|| format!("{} ERG", format::fee(fees / n)))),
+            "Total fees",
+            format!("{} ERG{}", format::fee(fees), usd_suffix(app, fees)),
+        ),
+        kv(
+            "Rate p50/90",
+            dash(
+                stats.map(|r| format!("{} / {} n/B", format::rate(r.median), format::rate(r.p90))),
+            ),
+        ),
+        kv(
+            "To get in",
+            dash(stats.map(|r| match r.entry {
+                Some(e) => format!("≥ {} n/B", format::rate(e)),
+                None => "any fee".into(),
+            })),
         ),
         kv("Avg size", dash((n > 0).then(|| format::bytes(bytes / n)))),
         kv(
@@ -142,32 +164,49 @@ fn tx_table(f: &mut Frame, area: Rect, app: &App, rows: &[&TxEntry], now_ms: u64
         .skip(start)
         .take(visible)
         .map(|e| {
+            let value = Line::from(format!(
+                "{}{}",
+                format::erg(e.metrics.value),
+                if e.metrics.approx { "~" } else { " " }
+            ))
+            .right_aligned();
+            let value = if app.is_whale(e) {
+                value.style(Style::new().fg(t.warning).add_modifier(Modifier::BOLD))
+            } else {
+                value
+            };
             Row::new(vec![
                 Cell::from(format::short_id(&e.tx.id)),
                 Cell::from(Line::from(vec![
                     Span::styled("■ ", Style::new().fg(rgb(e.class.class.color))),
                     Span::raw(format::trunc(&e.class.class.name, 12)),
                 ])),
-                Cell::from(format::fee(e.metrics.fee)),
-                Cell::from(format!(
-                    "{}{}",
-                    format::erg(e.metrics.value),
-                    if e.metrics.approx { "~" } else { "" }
-                )),
-                Cell::from(format::bytes(e.tx.size as u64)),
-                Cell::from(format::age(now_ms.saturating_sub(e.first_seen_ms))),
+                right(format::rate(fee_rate(e.metrics.fee, e.tx.size))),
+                right(format::fee(e.metrics.fee)),
+                Cell::from(value),
+                right(format::bytes(e.tx.size as u64)),
+                right(format::age(now_ms.saturating_sub(e.first_seen_ms))),
             ])
         })
         .collect();
-    let header = Row::new(vec!["ID", "Origin", "Fee", "Value", "Size", "Age"])
-        .style(Style::new().fg(t.accent).add_modifier(Modifier::BOLD));
+    let header = Row::new(vec![
+        Cell::from("ID"),
+        Cell::from("Origin"),
+        right("Rate".into()),
+        right("Fee".into()),
+        right("Value ".into()),
+        right("Size".into()),
+        right("Age".into()),
+    ])
+    .style(Style::new().fg(t.accent).add_modifier(Modifier::BOLD));
     let widths = [
         Constraint::Length(8),
         Constraint::Length(14),
         Constraint::Length(7),
-        Constraint::Length(10),
+        Constraint::Length(7),
+        Constraint::Length(11),
         Constraint::Length(8),
-        Constraint::Min(6),
+        Constraint::Length(7),
     ];
     let table = Table::new(shown, widths)
         .header(header)
@@ -178,6 +217,10 @@ fn tx_table(f: &mut Frame, area: Rect, app: &App, rows: &[&TxEntry], now_ms: u64
         state.select(Some(app.selected - start));
     }
     f.render_stateful_widget(table, area, &mut state);
+}
+
+fn right(s: String) -> Cell<'static> {
+    Cell::from(Line::from(s).right_aligned())
 }
 
 fn network(f: &mut Frame, area: Rect, app: &App) {
@@ -232,40 +275,57 @@ fn selected(f: &mut Frame, area: Rect, app: &App, entry: Option<&TxEntry>, now_m
     let t = app.theme;
     let lines = match entry {
         None => vec![Line::from("No transaction selected")],
-        Some(e) => vec![
-            kv("ID", format::short_id(&e.tx.id)),
-            kv("Origin", origin_text(e)),
-            kv("Fee", format!("{} ERG", format::fee(e.metrics.fee))),
-            kv(
-                "Value",
-                format!(
-                    "{} ERG{}",
-                    format::erg(e.metrics.value),
-                    if e.metrics.approx { " ~" } else { "" }
+        Some(e) => {
+            let mut lines = vec![
+                kv("ID", format::short_id(&e.tx.id)),
+                kv("Origin", origin_text(e)),
+                kv("Fee", format!("{} ERG", format::fee(e.metrics.fee))),
+                kv(
+                    "Value",
+                    format!(
+                        "{} ERG{}{}",
+                        format::erg(e.metrics.value),
+                        usd_suffix(app, e.metrics.value),
+                        if e.metrics.approx { " ~" } else { "" },
+                    ),
                 ),
-            ),
-            kv("Size", format::bytes(e.tx.size as u64)),
-            kv(
-                "Seen",
-                format!(
-                    "{} ago",
-                    format::age(now_ms.saturating_sub(e.first_seen_ms))
+                kv(
+                    "Fee rate",
+                    format!("{} n/B", format::rate(fee_rate(e.metrics.fee, e.tx.size))),
                 ),
-            ),
-            kv(
-                "Sources",
-                e.seen_by
-                    .iter()
-                    .map(|s| s.0.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
-            kv(
-                "In / Out",
-                format!("{} / {}", e.tx.inputs.len(), e.tx.outputs.len()),
-            ),
-            Line::from(Span::styled("Enter: full detail", Style::new().fg(t.dim))),
-        ],
+                kv("Size", format::bytes(e.tx.size as u64)),
+                kv(
+                    "Seen",
+                    format!(
+                        "{} ago",
+                        format::age(now_ms.saturating_sub(e.first_seen_ms))
+                    ),
+                ),
+                kv(
+                    "Sources",
+                    e.seen_by
+                        .iter()
+                        .map(|s| s.0.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+                kv(
+                    "In / Out",
+                    format!("{} / {}", e.tx.inputs.len(), e.tx.outputs.len()),
+                ),
+                Line::from(Span::styled("Enter: full detail", Style::new().fg(t.dim))),
+            ];
+            if app.is_whale(e) {
+                lines.insert(
+                    0,
+                    Line::from(Span::styled(
+                        format!("WHALE ≥ {} ERG", format::erg_whole(app.whale_nano)),
+                        Style::new().fg(t.warning).add_modifier(Modifier::BOLD),
+                    )),
+                );
+            }
+            lines
+        }
     };
     f.render_widget(
         Paragraph::new(lines).block(panel("SELECTED".into(), &t)),
