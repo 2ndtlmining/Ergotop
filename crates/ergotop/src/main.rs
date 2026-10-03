@@ -1,5 +1,3 @@
-mod headless;
-
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -34,5 +32,5 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("The TUI arrives in Plan 2; run with --headless for now.");
         return Ok(());
     }
-    headless::run(cfg, addrs).await
+    ergotop::headless::run(cfg, addrs).await
 }
