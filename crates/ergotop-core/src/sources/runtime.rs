@@ -235,11 +235,16 @@ pub async fn run_explorer(
     let mut last_height: u32 = 0;
     let mut fails: u32 = 0;
     let mut next_blocks = Instant::now();
+    let mut last_status: Option<SourceStatus> = None;
 
     while !tx.is_closed() {
         let started = Instant::now();
         match client.mempool().await {
-            Ok(txs) => {
+            Ok(snap) => {
+                let partial = snap.is_partial();
+                let total = snap.total;
+                let txs = snap.txs;
+                let served = txs.len();
                 fails = 0;
                 let ids: Vec<TxId> = txs.iter().map(|t| t.id.clone()).collect();
                 let new_txs = txs.into_iter().filter(|t| !known.contains(&t.id)).collect();
@@ -255,9 +260,28 @@ pub async fn run_explorer(
                     },
                 )
                 .await;
+                // Explorers can serve fewer txs than they count; say so instead of
+                // pretending the snapshot is complete. Only report changes.
+                let status = if partial {
+                    SourceStatus::Degraded(format!("partial: {served} of {total} txs served"))
+                } else {
+                    SourceStatus::Up
+                };
+                if last_status.as_ref() != Some(&status) {
+                    send(
+                        &tx,
+                        SourceEvent::Status {
+                            source: id.clone(),
+                            status: status.clone(),
+                        },
+                    )
+                    .await;
+                    last_status = Some(status);
+                }
             }
             Err(e) => {
                 fails += 1;
+                last_status = None;
                 report_failure(&tx, &id, fails, &e).await;
                 sleep(backoff(fails)).await;
                 continue;
@@ -811,5 +835,49 @@ mod tests {
     fn failed_book_refresh_retries_within_minutes() {
         assert_eq!(next_book_wait(true), Duration::from_secs(24 * 3600));
         assert!(next_book_wait(false) <= Duration::from_secs(15 * 60));
+    }
+
+    #[tokio::test]
+    async fn explorer_serving_part_of_its_mempool_is_degraded_not_down() {
+        let s = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/transactions/unconfirmed"))
+            .and(wiremock::matchers::query_param("limit", "10000"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"items":[],"total":3}"#))
+            .mount(&s)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/transactions/unconfirmed"))
+            .and(wiremock::matchers::query_param("limit", "10"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(include_str!(
+                "../../tests/fixtures/explorer/unconfirmed.json"
+            )))
+            .mount(&s)
+            .await;
+        mock(
+            &s,
+            "GET",
+            "/api/v1/blocks",
+            200,
+            r#"{"items":[],"total":0}"#,
+        )
+        .await;
+
+        let (tx, mut rx) = mpsc::channel(64);
+        let handle = tokio::spawn(run_explorer(
+            SourceId("p2p".into()),
+            ExplorerClient::new(http_client(), &s.uri()),
+            fast(),
+            tx,
+        ));
+        let events = collect(&mut rx, vec!["mempool", "status"]).await;
+        handle.abort();
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, SourceEvent::Mempool { ids, .. } if ids.len() == 1)));
+        assert!(
+            events.iter().any(|e| matches!(e, SourceEvent::Status { status: SourceStatus::Degraded(r), .. } if r == "partial: 1 of 3 txs served")),
+            "{events:?}"
+        );
     }
 }

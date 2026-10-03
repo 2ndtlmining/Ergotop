@@ -1,4 +1,6 @@
 //! Ergo Explorer API client (public and p2p instances share the API).
+use std::collections::HashSet;
+
 use serde::Deserialize;
 
 use super::{get_json, Result, SourceError};
@@ -122,6 +124,24 @@ fn to_tx(t: TxJson) -> Tx {
     }
 }
 
+/// Page sizes tried, in order, when the explorer returns nothing for one large page.
+const SMALL_PAGE_SIZES: [u32; 3] = [10, 5, 2];
+/// At most this many txs fetched through small pages per poll.
+const SMALL_MAX_TXS: u32 = 500;
+
+#[derive(Clone, Debug)]
+pub struct MempoolSnapshot {
+    pub txs: Vec<Tx>,
+    /// The explorer's own count, which can exceed what it actually served.
+    pub total: u64,
+}
+
+impl MempoolSnapshot {
+    pub fn is_partial(&self) -> bool {
+        (self.txs.len() as u64) < self.total
+    }
+}
+
 pub struct ExplorerClient {
     http: reqwest::Client,
     base: String,
@@ -135,19 +155,58 @@ impl ExplorerClient {
         }
     }
 
-    pub async fn mempool(&self) -> Result<Vec<Tx>> {
+    /// The explorer's mempool. Public explorers sometimes return an empty list for large
+    /// pages while still reporting a non-zero total; then this falls back to small pages.
+    pub async fn mempool(&self) -> Result<MempoolSnapshot> {
         let url = format!(
             "{}/transactions/unconfirmed?limit=10000&offset=0",
             self.base
         );
         let page: Page<TxJson> = get_json(&self.http, &url).await?;
-        let total = page.total.unwrap_or(0);
-        if page.items.is_empty() && total > 0 {
+        let mut total = page.total.unwrap_or(page.items.len() as u64);
+        if !page.items.is_empty() || total == 0 {
+            let txs: Vec<Tx> = page.items.into_iter().map(to_tx).collect();
+            return Ok(MempoolSnapshot {
+                total: total.max(txs.len() as u64),
+                txs,
+            });
+        }
+        let mut seen = HashSet::new();
+        let mut txs = Vec::new();
+        // The largest page an explorer backend will answer varies (seen: 10, then only 5),
+        // so use the first size whose first page returns data.
+        for size in SMALL_PAGE_SIZES {
+            for i in 0..SMALL_MAX_TXS / size {
+                let url = format!(
+                    "{}/transactions/unconfirmed?limit={size}&offset={}",
+                    self.base,
+                    i * size
+                );
+                let page: Page<TxJson> = get_json(&self.http, &url).await?;
+                total = total.max(page.total.unwrap_or(0));
+                let n = page.items.len();
+                for t in page.items {
+                    if seen.insert(t.id.clone()) {
+                        txs.push(to_tx(t));
+                    }
+                }
+                if n < size as usize || txs.len() as u64 >= total {
+                    break;
+                }
+            }
+            if !txs.is_empty() {
+                break;
+            }
+        }
+        if txs.is_empty() {
             return Err(SourceError::Parse(format!(
                 "explorer reported {total} unconfirmed txs but returned none"
             )));
         }
-        Ok(page.items.into_iter().map(to_tx).collect())
+        Ok(MempoolSnapshot {
+            total: total.max(txs.len() as u64),
+            txs,
+        })
     }
 
     pub async fn latest_blocks(&self, n: u32) -> Result<Vec<BlockRef>> {
@@ -186,7 +245,7 @@ impl ExplorerClient {
 mod tests {
     use super::*;
     use crate::sources::http_client;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const UNCONFIRMED: &str = include_str!("../../tests/fixtures/explorer/unconfirmed.json");
@@ -208,7 +267,8 @@ mod tests {
         let txs = ExplorerClient::new(http_client(), &s.uri())
             .mempool()
             .await
-            .unwrap();
+            .unwrap()
+            .txs;
         assert_eq!(txs.len(), 1);
         let t = &txs[0];
         assert_eq!(t.id, "e1");
@@ -292,7 +352,76 @@ mod tests {
         let txs = ExplorerClient::new(http_client(), &s.uri())
             .mempool()
             .await
-            .unwrap();
+            .unwrap()
+            .txs;
         assert!(txs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pages_through_small_requests_when_the_big_page_comes_back_empty() {
+        let s = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/transactions/unconfirmed"))
+            .and(query_param("limit", "10000"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"items":[],"total":3}"#))
+            .mount(&s)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/transactions/unconfirmed"))
+            .and(query_param("limit", "10"))
+            .and(query_param("offset", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(UNCONFIRMED))
+            .mount(&s)
+            .await;
+        let snap = ExplorerClient::new(http_client(), &s.uri())
+            .mempool()
+            .await
+            .unwrap();
+        assert_eq!(
+            snap.txs.len(),
+            1,
+            "small page served the tx the big page hid"
+        );
+        assert_eq!(snap.total, 3, "keeps the explorer's claimed total");
+        assert!(snap.is_partial());
+    }
+
+    #[tokio::test]
+    async fn a_full_big_page_is_not_partial() {
+        let s = MockServer::start().await;
+        mock(&s, "/transactions/unconfirmed", 200, UNCONFIRMED).await;
+        let snap = ExplorerClient::new(http_client(), &s.uri())
+            .mempool()
+            .await
+            .unwrap();
+        assert_eq!((snap.txs.len(), snap.total), (1, 1));
+        assert!(!snap.is_partial());
+    }
+
+    #[tokio::test]
+    async fn shrinks_the_page_size_until_the_explorer_answers() {
+        let s = MockServer::start().await;
+        for limit in ["10000", "10"] {
+            Mock::given(method("GET"))
+                .and(path("/transactions/unconfirmed"))
+                .and(query_param("limit", limit))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_string(r#"{"items":[],"total":3}"#),
+                )
+                .mount(&s)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path("/transactions/unconfirmed"))
+            .and(query_param("limit", "5"))
+            .and(query_param("offset", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(UNCONFIRMED))
+            .mount(&s)
+            .await;
+        let snap = ExplorerClient::new(http_client(), &s.uri())
+            .mempool()
+            .await
+            .unwrap();
+        assert_eq!((snap.txs.len(), snap.total), (1, 3));
     }
 }
