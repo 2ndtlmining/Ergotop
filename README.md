@@ -15,9 +15,16 @@ Written in Rust (ratatui + tokio). The previous Python/Textual version lives on 
 
 ## Install
 
-### Prebuilt binaries
+### Prebuilt binaries (internal)
 
-Download the archive for your platform from [Releases](https://github.com/2ndtlmining/Ergotop/releases), extract it and run `ergotop` (`ergotop.exe` on Windows).
+There are no public releases. To get binaries for Windows, Linux (x86_64 / ARM64) and macOS (Intel / Apple Silicon) without installing Rust, run the **Release** workflow by hand — it builds and uploads artifacts but never publishes:
+
+```bash
+gh workflow run Release --ref main
+gh run download $(gh run list --workflow Release --limit 1 --json databaseId --jq '.[0].databaseId')
+```
+
+or use GitHub → Actions → Release → *Run workflow*, then download the artifact for your platform from the run page. Linux builds need glibc 2.34+ (Ubuntu 22.04, Debian 12, Raspberry Pi OS bookworm or newer).
 
 ### From source
 
