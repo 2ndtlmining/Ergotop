@@ -104,10 +104,11 @@ pub struct App {
     pub show_only: bool,
     pub theme: Theme,
     pub viz: Visualizer,
+    /// Txs that left the pool but still occupy their slot until mined, dropped or expired.
+    leaving: HashMap<TxId, VizItem>,
     pub status: Option<(String, u64)>,
     pub block_flash_until: u64,
     pub banner: Option<String>,
-    last_tick_ms: u64,
     /// Latest time seen from events, keys or ticks (ms); stamps visualizer relayouts.
     clock_ms: u64,
 }
@@ -143,7 +144,7 @@ impl App {
     pub fn new(specs: &[SourceSpec], addrs: AddressesFile, ui: &UiConfig) -> App {
         let builtin = Builtin::load();
         let cls = Classifier::new(&builtin, &[], &addrs.address);
-        App {
+        let mut app = App {
             rec: Reconciler::new(specs.iter().map(|s| (s.id.clone(), s.kind)).collect()),
             cls,
             builtin,
@@ -162,12 +163,14 @@ impl App {
             show_only: false,
             theme: Theme::by_name(&ui.theme),
             viz: Visualizer::new(),
+            leaving: HashMap::new(),
             status: None,
             block_flash_until: 0,
             banner: None,
-            last_tick_ms: 0,
             clock_ms: 0,
-        }
+        };
+        app.viz.set_motion(ui.motion);
+        app
     }
 
     pub fn on_source_event(&mut self, ev: SourceEvent, now_ms: u64) {
@@ -198,14 +201,21 @@ impl App {
             match u {
                 Update::Added(_) => changed = true,
                 Update::Dropped(ids) => {
-                    self.viz.forget(ids);
+                    for id in ids {
+                        self.leaving.remove(id);
+                    }
+                    self.viz.on_dropped(ids, now_ms);
                     changed = true;
                 }
                 Update::Mined { tx_ids, .. } => {
+                    for id in tx_ids {
+                        self.leaving.remove(id);
+                    }
                     self.viz.on_mined(tx_ids, now_ms);
                     changed = true;
                 }
                 Update::Resynced => {
+                    self.leaving.clear();
                     changed = true;
                     animate = false;
                 }
@@ -215,6 +225,14 @@ impl App {
                 }
                 Update::SourcesChanged => {}
             }
+        }
+        if !changed {
+            // A poll that only removes txs emits no update, but their sprites must become pending.
+            let pool = self.rec.pool();
+            changed = self
+                .viz
+                .placed()
+                .any(|s| s.state == crate::viz::State::Active && !pool.contains_key(&s.id));
         }
         if changed {
             self.relayout(animate);
@@ -246,19 +264,41 @@ impl App {
     }
 
     pub fn relayout(&mut self, animate: bool) {
-        let items: Vec<VizItem> = self
-            .rec
-            .pool()
+        let pool = self.rec.pool();
+        // Pending tracking follows motion, not this relayout's animation: a resize or
+        // address-book reload must not lose txs that are waiting for their block.
+        if self.viz.motion {
+            for s in self.viz.placed() {
+                if !pool.contains_key(&s.id) && !self.leaving.contains_key(&s.id) {
+                    self.leaving.insert(
+                        s.id.clone(),
+                        VizItem {
+                            id: s.id.clone(),
+                            size_bytes: s.size_bytes,
+                            fee: s.fee,
+                            color: s.color,
+                            pending: true,
+                        },
+                    );
+                }
+            }
+        } else {
+            self.leaving.clear();
+        }
+        self.leaving.retain(|id, _| !pool.contains_key(id));
+        let mut items: Vec<VizItem> = pool
             .values()
             .map(|e| VizItem {
                 id: e.tx.id.clone(),
                 size_bytes: e.tx.size,
                 fee: e.metrics.fee,
                 color: rgb(e.class.class.color),
+                pending: false,
             })
             .collect();
+        items.extend(self.leaving.values().cloned());
         let capacity = self.max_block_size();
-        self.viz.relayout(&items, capacity, animate, self.clock_ms);
+        self.viz.relayout(&items, capacity, self.clock_ms, !animate);
     }
 
     pub fn resize_viz(&mut self, w_cells: u16, h_cells: u16) {
@@ -457,13 +497,14 @@ impl App {
 
     pub fn tick(&mut self, now_ms: u64) -> bool {
         self.clock_ms = self.clock_ms.max(now_ms);
-        let dt = if self.last_tick_ms == 0 {
-            0
-        } else {
-            now_ms.saturating_sub(self.last_tick_ms).min(100)
-        };
-        self.last_tick_ms = now_ms;
-        let animating = self.viz.tick(dt, now_ms);
+        let expired = self.viz.expire_pending(now_ms);
+        if !expired.is_empty() {
+            for id in &expired {
+                self.leaving.remove(id);
+            }
+            self.relayout(true);
+        }
+        let animating = self.viz.tick(now_ms);
         let had_status = self.status.is_some();
         if self
             .status
@@ -562,6 +603,17 @@ impl App {
             KeyCode::Char('t') => {
                 self.theme = self.theme.next();
                 self.set_status(format!("Theme: {}", self.theme.name), now_ms);
+                Action::None
+            }
+            KeyCode::Char('m') => {
+                let on = !self.viz.motion;
+                self.viz.set_motion(on);
+                if !on {
+                    // Motion off: exits are immediate, so pending txs are cleared too.
+                    self.leaving.clear();
+                    self.relayout(false);
+                }
+                self.set_status(format!("Motion {}", if on { "on" } else { "off" }), now_ms);
                 Action::None
             }
             KeyCode::Char('?') => {
@@ -1040,19 +1092,19 @@ mod tests {
             node_mempool(vec![tid("b2"), tid("c3"), tid("d4"), tid("e5")], vec![e5]),
             NOW + 1_000,
         );
+        let a1 = app.viz.sprite(&tid("a1")).expect("a1 waits in place");
+        assert!(matches!(a1.state, crate::viz::State::Pending { .. }));
         app.on_source_event(
             block_with(1_886_102, vec!["cb2".into(), tid("a1")]),
             NOW + 3_000,
         );
+        assert!(app.viz.sprite(&tid("a1")).is_none());
         let flashing = app
             .viz
             .sprites()
-            .filter(|s| matches!(s.phase, crate::viz::Phase::Flashing { .. }))
+            .filter(|s| matches!(s.state, crate::viz::State::Flashing { .. }))
             .count();
-        assert_eq!(
-            flashing, 1,
-            "a1 flashes even though it left the pool before its block was seen"
-        );
+        assert_eq!(flashing, 1, "a1 launches from where it was built");
     }
 
     #[test]
@@ -1095,6 +1147,101 @@ mod tests {
         assert_eq!(
             app.on_key(key(KeyCode::Char('q')), NOW + 1_000),
             Action::Quit
+        );
+    }
+
+    #[test]
+    fn pending_txs_fade_when_the_reconciler_drops_them() {
+        let mut app = sample_app();
+        let rest = vec![tid("b2"), tid("c3"), tid("d4")];
+        app.on_source_event(node_mempool(rest.clone(), vec![]), NOW + 1_000);
+        let a1 = app.viz.sprite(&tid("a1")).expect("a1 still holds its slot");
+        assert!(
+            matches!(a1.state, crate::viz::State::Pending { .. }),
+            "a removal with no other change still marks the tx pending"
+        );
+        app.on_source_event(node_mempool(rest, vec![]), NOW + 17_000);
+        assert!(app.viz.sprite(&tid("a1")).is_none());
+        assert!(app
+            .viz
+            .sprites()
+            .any(|s| matches!(s.state, crate::viz::State::Fading { .. })));
+    }
+
+    #[test]
+    fn pending_txs_expire_after_the_hold() {
+        let mut app = sample_app();
+        app.on_source_event(
+            node_mempool(vec![tid("b2"), tid("c3"), tid("d4")], vec![]),
+            NOW + 1_000,
+        );
+        app.tick(NOW + 1_000 + crate::viz::PENDING_HOLD_MS - 1);
+        assert!(app.viz.sprite(&tid("a1")).is_some());
+        app.tick(NOW + 1_000 + crate::viz::PENDING_HOLD_MS);
+        assert!(app.viz.sprite(&tid("a1")).is_none());
+    }
+
+    #[test]
+    fn m_toggles_motion_and_config_sets_the_default() {
+        let mut app = sample_app();
+        assert!(app.viz.motion);
+        app.on_key(key(KeyCode::Char('m')), NOW);
+        assert!(!app.viz.motion);
+        assert_eq!(app.status.as_ref().unwrap().0, "Motion off");
+        app.on_key(key(KeyCode::Char('m')), NOW);
+        assert!(app.viz.motion);
+        let ui = ergotop_core::config::UiConfig {
+            motion: false,
+            ..Default::default()
+        };
+        assert!(!App::new(&specs(), Default::default(), &ui).viz.motion);
+    }
+
+    #[test]
+    fn switching_views_keeps_pending_txs_so_their_block_still_launches() {
+        let mut app = sample_app();
+        app.on_source_event(
+            node_mempool(vec![tid("b2"), tid("c3"), tid("d4")], vec![]),
+            NOW + 1_000,
+        );
+        app.resize_viz(70, 14);
+        let a1 = app
+            .viz
+            .sprite(&tid("a1"))
+            .expect("still pending after a resize");
+        assert!(matches!(a1.state, crate::viz::State::Pending { .. }));
+        app.on_source_event(
+            block_with(1_886_102, vec!["cb2".into(), tid("a1")]),
+            NOW + 3_000,
+        );
+        let flashing = app
+            .viz
+            .sprites()
+            .filter(|s| matches!(s.state, crate::viz::State::Flashing { .. }))
+            .count();
+        assert_eq!(flashing, 1);
+    }
+
+    #[test]
+    fn motion_off_clears_pending_and_stops_tracking_it() {
+        let mut app = sample_app();
+        app.on_source_event(
+            node_mempool(vec![tid("b2"), tid("c3"), tid("d4")], vec![]),
+            NOW + 1_000,
+        );
+        assert!(app.viz.sprite(&tid("a1")).is_some());
+        app.on_key(key(KeyCode::Char('m')), NOW + 1_000);
+        assert!(
+            app.viz.sprite(&tid("a1")).is_none(),
+            "pending cleared when motion goes off"
+        );
+        app.on_source_event(
+            node_mempool(vec![tid("c3"), tid("d4")], vec![]),
+            NOW + 2_000,
+        );
+        assert!(
+            app.viz.sprite(&tid("b2")).is_none(),
+            "no new pending while motion is off"
         );
     }
 }

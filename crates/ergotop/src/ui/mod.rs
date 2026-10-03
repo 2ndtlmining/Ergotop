@@ -278,7 +278,16 @@ pub(crate) mod tests {
         let mut app = sample_app();
         app.overlay = crate::app::Overlay::Help;
         let s = screen(&mut app, 120, 34);
-        assert_contains(&s, &["KEYS", "Cycle sort", "Toggle hexagon", "Quit"]);
+        assert_contains(
+            &s,
+            &[
+                "KEYS",
+                "Cycle sort",
+                "Toggle hexagon",
+                "Toggle motion",
+                "Quit",
+            ],
+        );
         insta::assert_snapshot!("help", s);
     }
 

@@ -1,4 +1,5 @@
 //! Ergotop terminal UI.
+pub mod anim;
 pub mod app;
 pub mod canvas;
 pub mod format;

@@ -18,9 +18,9 @@ expression: s
 │                 │e              Open tx in explorer                                                │                 │
 │                 │l              Toggle hexagon packing                                             │                 │
 │                 │t              Cycle theme                                                        │                 │
+│                 │m              Toggle motion                                                      │                 │
 │                 │?              Help                                                               │                 │
 │                 │q              Quit                                                               │                 │
-│                 │                                                                                  │                 │
 │                 │                                                                                  │                 │
 │                 │                                                                                  │                 │
 │                 │                                                                                  │                 │
