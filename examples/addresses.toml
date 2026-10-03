@@ -1,0 +1,14 @@
+# Your own address labels — copy next to ergotop.toml as `addresses.toml`.
+# They take priority over the ergexplorer.com address book and the built-in list.
+# kind (optional): Exchange, Service, Mining pool, Meme, Local (default)
+# color (optional): "#rrggbb"
+
+[[address]]
+address = "9fyeEQBXvJzRYpRmrNy2eaB2kDqQGDk3KoSQGUB62db3tVDw2Z1"
+name = "My mining wallet"
+kind = "Local"
+color = "#f1c40f"
+
+[[address]]
+address = "9guaDYhHCxtfAdRTKr8xXaDuXtdB8gdGB7WwnB5zTBw93Ym3Rsq"
+name = "Cold storage"
