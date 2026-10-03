@@ -4,7 +4,6 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-  pull_request: # TEMPORARY: verify the build matrix before release.yml exists on main
 
 permissions:
   contents: read
