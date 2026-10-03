@@ -5,7 +5,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ergotop_core::classify::{BookEntry, Builtin, Classifier};
 use ergotop_core::config::{AddressesFile, LocalAddress, SourceSpec, UiConfig};
 use ergotop_core::metrics::FEE_ADDRESS;
-use ergotop_core::model::{nano_to_erg, Block, NodeInfo, SourceKind, Token, TokenMeta, TxId};
+use ergotop_core::model::{
+    nano_to_erg, Block, NodeInfo, SourceId, SourceKind, Token, TokenMeta, TxId,
+};
 use ergotop_core::packing::Shape;
 use ergotop_core::reconcile::{Reconciler, TxEntry, Update};
 use ergotop_core::sources::SourceEvent;
@@ -101,6 +103,8 @@ pub struct App {
     /// The selected tx; `selected` is re-derived from it whenever rows change.
     selected_id: Option<TxId>,
     pub source_sel: usize,
+    /// Base URL per source, for copy/open in the Sources view.
+    source_urls: HashMap<SourceId, String>,
     pub show_only: bool,
     pub theme: Theme,
     pub viz: Visualizer,
@@ -160,6 +164,10 @@ impl App {
             selected: 0,
             selected_id: None,
             source_sel: 0,
+            source_urls: specs
+                .iter()
+                .map(|s| (s.id.clone(), s.url.clone()))
+                .collect(),
             show_only: false,
             theme: Theme::by_name(&ui.theme),
             viz: Visualizer::new(),
@@ -346,6 +354,12 @@ impl App {
             }),
         }
         v
+    }
+
+    fn selected_source_url(&self) -> Option<String> {
+        let views = self.rec.views();
+        let v = views.get(self.source_sel)?;
+        self.source_urls.get(&v.id).cloned()
     }
 
     pub fn selected_entry(&self) -> Option<&TxEntry> {
@@ -581,6 +595,16 @@ impl App {
                 self.filter.clear();
                 Action::None
             }
+            KeyCode::Char('c') if self.view == View::Sources => match self.selected_source_url() {
+                Some(url) => {
+                    self.set_status(format!("Copied {url}"), now_ms);
+                    Action::Copy(url)
+                }
+                None => Action::None,
+            },
+            KeyCode::Char('e') if self.view == View::Sources => self
+                .selected_source_url()
+                .map_or(Action::None, Action::Open),
             KeyCode::Char('c') => match self.selected_entry().map(|e| e.tx.id.clone()) {
                 Some(id) => {
                     self.set_status(format!("Copied {}", format::short_id(&id)), now_ms);
@@ -951,6 +975,22 @@ mod tests {
         app.on_key(key(KeyCode::Enter), NOW);
         assert!(app.show_only);
         assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn copy_and_open_act_on_selected_source_in_sources_view() {
+        let mut app = sample_app();
+        app.view = View::Sources;
+        app.on_key(key(KeyCode::Down), NOW);
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('c')), NOW),
+            Action::Copy("https://p2p".into())
+        );
+        assert_eq!(app.status.as_ref().unwrap().0, "Copied https://p2p");
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('e')), NOW),
+            Action::Open("https://p2p".into())
+        );
     }
 
     #[test]

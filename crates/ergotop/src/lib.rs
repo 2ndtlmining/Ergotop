@@ -2,6 +2,7 @@
 pub mod anim;
 pub mod app;
 pub mod canvas;
+pub mod clock;
 pub mod format;
 pub mod headless;
 pub mod theme;

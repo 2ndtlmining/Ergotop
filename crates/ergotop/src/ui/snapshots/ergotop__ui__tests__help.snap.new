@@ -1,5 +1,6 @@
 ---
 source: crates/ergotop/src/ui/mod.rs
+assertion_line: 291
 expression: s
 ---
  ERGOTOP   Block #1,886,101  ERG $0.3262  4 tx · 22.3 KB  mempool 1% of block                                           

@@ -1,6 +1,4 @@
 //! `--headless`: print reconciled mempool activity as text lines.
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use ergotop_core::classify::{BookEntry, Builtin, Classifier};
 use ergotop_core::config::{cache_dir, AddressesFile, Config};
 use ergotop_core::model::{nano_to_erg, SourceId};
@@ -8,12 +6,7 @@ use ergotop_core::reconcile::{Reconciler, SourceView, TxEntry, Update};
 use ergotop_core::sources::runtime::{spawn_all, Timing};
 use ergotop_core::sources::SourceEvent;
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+use crate::clock::now_ms;
 
 pub fn tx_line(e: &TxEntry) -> String {
     let id: String = e.tx.id.chars().take(8).collect();

@@ -18,7 +18,6 @@ pub fn draw(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
 pub fn viz_panel(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
     let t = app.theme;
     let max = app.max_block_size() as u64;
-    let r = &app.viz.last;
     let pct = app.viz.block_bytes * 100 / max.max(1);
     let mut title = format!(
         "NEXT BLOCK  {} tx · {} / {} ({pct}%)",
@@ -29,8 +28,8 @@ pub fn viz_panel(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
     if app.viz.shape == ergotop_core::packing::Shape::Hexagon {
         title.push_str(" · hexagon");
     }
-    if r.not_shown > 0 {
-        title.push_str(&format!(" · {} not shown", r.not_shown));
+    if app.viz.not_shown > 0 {
+        title.push_str(&format!(" · {} not shown", app.viz.not_shown));
     }
     let block = panel(title, &t);
     let inner = block.inner(area);

@@ -1,5 +1,5 @@
 //! Terminal event loop: source events, key presses and an fps tick; redraw only when dirty.
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use crossterm::clipboard::CopyToClipboard;
 use crossterm::event::{Event, EventStream, KeyEventKind};
@@ -9,13 +9,7 @@ use ergotop_core::sources::runtime::{spawn_all, Timing};
 use futures::StreamExt;
 
 use crate::app::{Action, App};
-
-pub fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+use crate::clock::now_ms;
 
 fn frame_interval(fps: u32) -> Duration {
     Duration::from_millis(1000 / u64::from(fps.clamp(1, 120)))
