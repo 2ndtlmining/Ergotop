@@ -26,10 +26,10 @@ Requires **Rust 1.89 or newer** via [rustup](https://rustup.rs). Distribution pa
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
-cargo install --git https://github.com/2ndtlmining/Ergotop ergotop
+cargo install --locked --git https://github.com/2ndtlmining/Ergotop ergotop
 ```
 
-Or clone and run: `cargo run --release -p ergotop`. On Debian/Ubuntu you may also need `build-essential`.
+Or clone and run: `cargo run --release -p ergotop`. On Debian/Ubuntu you also need a C compiler for the TLS/crypto dependencies: `apt install build-essential`.
 
 ## Usage
 

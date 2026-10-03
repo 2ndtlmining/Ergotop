@@ -8,6 +8,12 @@
 # Logs (e.g. ergotop --log)
 *.log
 
+# Secrets and leftovers from the Python version
+.env
+__pycache__/
+*.py[cod]
+.venv/
+
 # Editors / OS
 .idea/
 .vscode/
