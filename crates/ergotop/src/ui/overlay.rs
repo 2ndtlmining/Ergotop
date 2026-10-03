@@ -6,14 +6,16 @@ use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 use super::{kv, origin_text, panel};
-use crate::app::App;
+use crate::app::{App, EXPLORER_TX_URL};
 use crate::format;
 
-const KEYS: [(&str, &str); 13] = [
+const KEYS: [(&str, &str); 15] = [
     ("1 2 3", "Dashboard / Packing / Sources"),
-    ("↑ ↓ PgUp PgDn", "Move selection"),
+    ("↑ ↓ PgUp PgDn", "Move selection (detail: scroll)"),
+    ("g G Home End", "Top / bottom"),
     ("Enter", "Transaction detail (Sources: txs only in source)"),
     ("s", "Cycle sort: rate → fee → value → size → age → origin"),
+    ("S", "Reverse sort direction"),
     ("/", "Filter: name, kind, tx id, >ERG, <ERG"),
     ("Esc", "Clear filter / close"),
     ("c", "Copy tx id (Sources: source URL)"),
@@ -49,7 +51,7 @@ pub fn help(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-pub fn detail(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
+pub fn detail(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
     let Some(e) = app.selected_entry() else {
         return;
     };
@@ -58,6 +60,11 @@ pub fn detail(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
     let r = centered(area, 85, 85);
     let mut lines = vec![
         kv("ID", e.tx.id.clone()),
+        // Unlabelled so the full URL fits (and stays clickable) on narrower terminals.
+        Line::from(Span::styled(
+            format!("{EXPLORER_TX_URL}{}", e.tx.id),
+            Style::new().fg(t.dim),
+        )),
         kv(
             "Origin",
             format!("{} ({})", origin_text(e), e.class.class.kind.label()),
@@ -138,9 +145,20 @@ pub fn detail(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
         "c: copy id · e: open in explorer · Esc: close",
         Style::new().fg(t.dim),
     )));
+    // Clamp so Up right after End moves at once; the title says when there is more.
+    let max_scroll = (lines.len() as u16).saturating_sub(r.height.saturating_sub(2));
+    let scroll = app.detail_scroll.min(max_scroll);
+    let title = if max_scroll > 0 {
+        format!("TRANSACTION  ↑↓ scroll {}/{}", scroll, max_scroll)
+    } else {
+        "TRANSACTION".into()
+    };
     f.render_widget(Clear, r);
     f.render_widget(
-        Paragraph::new(lines).block(panel("TRANSACTION".into(), &t)),
+        Paragraph::new(lines)
+            .scroll((scroll, 0))
+            .block(panel(title, &t)),
         r,
     );
+    app.detail_scroll = scroll;
 }

@@ -21,7 +21,7 @@ pub const DEFAULT_MAX_BLOCK_SIZE: u32 = 1_271_009;
 const STATUS_MS: u64 = 3_000;
 const BLOCK_FLASH_MS: u64 = 1_500;
 const PAGE: usize = 10;
-const EXPLORER_TX_URL: &str = "https://explorer.ergoplatform.com/en/transactions/";
+pub const EXPLORER_TX_URL: &str = "https://explorer.ergoplatform.com/en/transactions/";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -104,6 +104,10 @@ pub struct App {
     pub filter: String,
     pub filtering: bool,
     pub sort: SortKey,
+    /// Sort opposite to the key's natural direction (`S`).
+    pub sort_reversed: bool,
+    /// First visible line of the detail popup; clamped to its content when drawn.
+    pub detail_scroll: u16,
     pub selected: usize,
     /// The selected tx; `selected` is re-derived from it whenever rows change.
     selected_id: Option<TxId>,
@@ -167,6 +171,8 @@ impl App {
             filter: String::new(),
             filtering: false,
             sort: SortKey::Rate,
+            sort_reversed: false,
+            detail_scroll: 0,
             selected: 0,
             selected_id: None,
             source_sel: 0,
@@ -363,7 +369,20 @@ impl App {
                     .then_with(|| a.tx.id.cmp(&b.tx.id))
             }),
         }
+        if self.sort_reversed {
+            v.reverse();
+        }
         v
+    }
+
+    /// ▼ for largest/oldest first, ▲ for smallest/newest first (origin: ▲ is A→Z).
+    pub fn sort_arrow(&self) -> &'static str {
+        let natural_up = self.sort == SortKey::Origin;
+        if natural_up != self.sort_reversed {
+            "▲"
+        } else {
+            "▼"
+        }
     }
 
     fn selected_source_url(&self) -> Option<String> {
@@ -582,6 +601,30 @@ impl App {
                     return Action::None;
                 }
                 KeyCode::Char('c') | KeyCode::Char('e') if self.overlay == Overlay::Detail => {}
+                KeyCode::Up | KeyCode::Char('k') if self.overlay == Overlay::Detail => {
+                    self.scroll_detail(-1);
+                    return Action::None;
+                }
+                KeyCode::Down | KeyCode::Char('j') if self.overlay == Overlay::Detail => {
+                    self.scroll_detail(1);
+                    return Action::None;
+                }
+                KeyCode::PageUp if self.overlay == Overlay::Detail => {
+                    self.scroll_detail(-(PAGE as i64));
+                    return Action::None;
+                }
+                KeyCode::PageDown if self.overlay == Overlay::Detail => {
+                    self.scroll_detail(PAGE as i64);
+                    return Action::None;
+                }
+                KeyCode::Home | KeyCode::Char('g') if self.overlay == Overlay::Detail => {
+                    self.detail_scroll = 0;
+                    return Action::None;
+                }
+                KeyCode::End | KeyCode::Char('G') if self.overlay == Overlay::Detail => {
+                    self.detail_scroll = u16::MAX;
+                    return Action::None;
+                }
                 _ => return Action::None,
             }
         }
@@ -594,18 +637,24 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::PageUp => self.move_selection(-(PAGE as i64)),
             KeyCode::PageDown => self.move_selection(PAGE as i64),
-            KeyCode::Home => self.move_selection(i64::MIN / 2),
-            KeyCode::End => self.move_selection(i64::MAX / 2),
+            KeyCode::Home | KeyCode::Char('g') => self.move_selection(i64::MIN / 2),
+            KeyCode::End | KeyCode::Char('G') => self.move_selection(i64::MAX / 2),
             KeyCode::Enter => {
                 if self.view == View::Sources {
                     self.show_only = !self.show_only;
                 } else if self.selected_entry().is_some() {
                     self.overlay = Overlay::Detail;
+                    self.detail_scroll = 0;
                 }
                 Action::None
             }
             KeyCode::Char('s') => {
                 self.sort = self.sort.next();
+                self.sort_reversed = false;
+                Action::None
+            }
+            KeyCode::Char('S') => {
+                self.sort_reversed = !self.sort_reversed;
                 Action::None
             }
             KeyCode::Char('/') => {
@@ -669,6 +718,11 @@ impl App {
         };
         self.clamp_selection();
         action
+    }
+
+    fn scroll_detail(&mut self, delta: i64) {
+        let cur = i64::from(self.detail_scroll.min(u16::MAX - 1));
+        self.detail_scroll = (cur + delta).clamp(0, i64::from(u16::MAX - 1)) as u16;
     }
 
     fn set_view(&mut self, view: View) -> Action {
@@ -874,6 +928,52 @@ mod tests {
         assert_eq!(ids(&app), vec!["d4", "b2", "a1", "c3"]);
         app.sort = SortKey::Origin;
         assert_eq!(app.rows()[0].class.class.name, "Contract");
+    }
+
+    #[test]
+    fn shift_s_reverses_and_s_resets_direction() {
+        let mut app = sample_app();
+        assert_eq!(app.sort_arrow(), "▼");
+        app.on_key(key(KeyCode::Char('S')), NOW);
+        assert!(app.sort_reversed);
+        assert_eq!(app.sort_arrow(), "▲");
+        assert_eq!(ids(&app), vec!["d4", "b2", "a1", "c3"]);
+        assert_eq!(
+            app.selected_entry().unwrap().tx.id,
+            tid("c3"),
+            "selection follows its tx"
+        );
+        app.on_key(key(KeyCode::Char('s')), NOW);
+        assert_eq!((app.sort, app.sort_reversed), (SortKey::Fee, false));
+        app.sort = SortKey::Origin;
+        assert_eq!(app.sort_arrow(), "▲", "origin sorts A→Z");
+    }
+
+    #[test]
+    fn g_and_shift_g_jump_to_top_and_bottom() {
+        let mut app = sample_app();
+        app.view = View::Dashboard;
+        app.on_key(key(KeyCode::Char('G')), NOW);
+        assert_eq!(app.selected, 3);
+        app.on_key(key(KeyCode::Char('g')), NOW);
+        assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn detail_popup_scrolls_without_moving_the_selection() {
+        let mut app = sample_app();
+        app.on_key(key(KeyCode::Enter), NOW);
+        app.on_key(key(KeyCode::Down), NOW);
+        app.on_key(key(KeyCode::PageDown), NOW);
+        assert_eq!(app.detail_scroll, 1 + PAGE as u16);
+        assert_eq!(app.selected, 0);
+        app.on_key(key(KeyCode::Home), NOW);
+        assert_eq!(app.detail_scroll, 0);
+        app.on_key(key(KeyCode::End), NOW);
+        assert_eq!(app.detail_scroll, u16::MAX, "clamped to content when drawn");
+        app.on_key(key(KeyCode::Esc), NOW);
+        app.on_key(key(KeyCode::Enter), NOW);
+        assert_eq!(app.detail_scroll, 0, "reopening starts at the top");
     }
 
     #[test]

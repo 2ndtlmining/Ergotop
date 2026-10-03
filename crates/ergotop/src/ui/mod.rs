@@ -157,7 +157,7 @@ fn status_bar(f: &mut Frame, area: Rect, app: &App) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::app::testkit::{sample_app, specs, NOW};
+    use crate::app::testkit::{sample_app, specs, tid, NOW};
     use crate::app::View;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -312,6 +312,35 @@ pub(crate) mod tests {
             ],
         );
         insta::assert_snapshot!("help", s);
+    }
+
+    #[test]
+    fn table_header_and_title_show_sort_direction() {
+        let mut app = sample_app();
+        app.view = View::Dashboard;
+        assert_contains(&screen(&mut app, 140, 40), &["sort:rate ▼", "Rate▼"]);
+        app.sort_reversed = true;
+        assert_contains(&screen(&mut app, 140, 40), &["sort:rate ▲", "Rate▲"]);
+    }
+
+    #[test]
+    fn detail_overlay_scrolls_and_links_the_explorer() {
+        let mut app = sample_app();
+        app.overlay = crate::app::Overlay::Detail;
+        app.filter = "kucoin".into();
+        let s = screen(&mut app, 140, 34);
+        let url = format!(
+            "https://explorer.ergoplatform.com/en/transactions/{}",
+            tid("a1")
+        );
+        assert_contains(&s, &[url.as_str()]);
+        // A short terminal cannot show the whole tx: the title says it scrolls,
+        // and End clamps to the last page so Up moves right away.
+        app.detail_scroll = u16::MAX;
+        let s = screen(&mut app, 120, 16);
+        assert_contains(&s, &["↑↓ scroll", "Esc: close"]);
+        let bottom = app.detail_scroll;
+        assert!(bottom > 0 && bottom < 30, "clamped, got {bottom}");
     }
 
     #[test]

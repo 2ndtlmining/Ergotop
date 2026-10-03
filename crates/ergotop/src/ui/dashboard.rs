@@ -6,7 +6,7 @@ use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
 use super::{kv, origin_counts, origin_text, panel, util_color};
-use crate::app::App;
+use crate::app::{App, SortKey};
 use crate::format;
 use crate::theme::rgb;
 use ergotop_core::metrics::fee_rate;
@@ -143,9 +143,10 @@ fn blocks(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
 fn tx_table(f: &mut Frame, area: Rect, app: &App, rows: &[&TxEntry], now_ms: u64) {
     let t = app.theme;
     let title = format!(
-        "TRANSACTIONS {} · sort:{}{}",
+        "TRANSACTIONS {} · sort:{} {}{}",
         rows.len(),
         app.sort.label(),
+        app.sort_arrow(),
         if app.filter.is_empty() {
             String::new()
         } else {
@@ -189,14 +190,21 @@ fn tx_table(f: &mut Frame, area: Rect, app: &App, rows: &[&TxEntry], now_ms: u64
             ])
         })
         .collect();
+    let label = |name: &str, key: SortKey| {
+        if app.sort == key {
+            format!("{name}{}", app.sort_arrow())
+        } else {
+            name.to_string()
+        }
+    };
     let header = Row::new(vec![
         Cell::from("ID"),
-        Cell::from("Origin"),
-        right("Rate".into()),
-        right("Fee".into()),
-        right("Value ".into()),
-        right("Size".into()),
-        right("Age".into()),
+        Cell::from(label("Origin", SortKey::Origin)),
+        right(label("Rate", SortKey::Rate)),
+        right(label("Fee", SortKey::Fee)),
+        right(format!("{:<6}", label("Value", SortKey::Value))),
+        right(label("Size", SortKey::Size)),
+        right(label("Age", SortKey::Age)),
     ])
     .style(Style::new().fg(t.accent).add_modifier(Modifier::BOLD));
     let widths = [
