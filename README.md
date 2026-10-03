@@ -67,9 +67,36 @@ The status bar shows the active source: `● node-a` (your node), `○ explorer 
 
 A terminal with true-color support is recommended (Windows Terminal, iTerm2, most Linux terminals).
 
+## Point it at your node
+
+Ergotop reads your node addresses from `ergotop.toml` in its config folder. Start from the commented example in [`examples/ergotop.toml`](examples/ergotop.toml):
+
+```bash
+# Linux / macOS (from the repo folder)
+mkdir -p ~/.config/ergotop                       # macOS: ~/Library/Application Support/ergotop
+cp examples/ergotop.toml ~/.config/ergotop/ergotop.toml
+nano ~/.config/ergotop/ergotop.toml              # set url = "http://<your-node-ip>:9053"
+```
+
+```powershell
+# Windows
+mkdir $env:APPDATA\ergotop -Force
+copy examples\ergotop.toml $env:APPDATA\ergotop\ergotop.toml
+notepad $env:APPDATA\ergotop\ergotop.toml
+```
+
+Then run `ergotop`: the status bar shows `● node-a` when your node is the live source (press `3` for every source's status). Without a config file Ergotop tries `http://127.0.0.1:9053` and falls back to the public explorers.
+
+Other ways to set the node:
+
+- `ergotop --config /path/to/folder` — read `ergotop.toml` / `addresses.toml` from that folder instead
+- `ERGO_NODE_URL=http://192.168.1.50:9053 ergotop` — a single node, no file needed
+
+Your own address labels go in `addresses.toml` next to it — see [`examples/addresses.toml`](examples/addresses.toml).
+
 ## Configuration
 
-All files are optional. Ergotop looks in:
+All files are optional (commented examples: [`examples/`](examples/)). Ergotop looks in:
 
 | OS | Config directory | Cache (address book) |
 |---|---|---|

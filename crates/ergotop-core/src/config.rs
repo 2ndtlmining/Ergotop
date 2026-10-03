@@ -253,4 +253,17 @@ mod tests {
         assert_eq!(cfg, Config::default());
         assert_eq!(warnings.len(), 1);
     }
+
+    #[test]
+    fn shipped_example_files_parse() {
+        let cfg: Config = toml::from_str(include_str!("../../../examples/ergotop.toml")).unwrap();
+        let ids: Vec<String> = cfg.sources().into_iter().map(|s| s.id.0).collect();
+        assert_eq!(ids, vec!["node-a", "node-b", "p2p", "public"]);
+        assert_eq!(cfg.sources()[0].url, "http://192.168.1.50:9053");
+        assert!(cfg.ui.motion);
+        let addrs: AddressesFile =
+            toml::from_str(include_str!("../../../examples/addresses.toml")).unwrap();
+        assert_eq!(addrs.address.len(), 2);
+        assert_eq!(addrs.address[0].kind.as_deref(), Some("Local"));
+    }
 }

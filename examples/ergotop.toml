@@ -1,0 +1,28 @@
+# Ergotop configuration — copy to your config folder as `ergotop.toml`:
+#   Linux:   ~/.config/ergotop/ergotop.toml        (as root: /root/.config/ergotop/ergotop.toml)
+#   macOS:   ~/Library/Application Support/ergotop/ergotop.toml
+#   Windows: %APPDATA%\ergotop\ergotop.toml
+# or keep it anywhere and run `ergotop --config <folder>`.
+# Every setting is optional; delete what you don't need.
+
+# Your Ergo nodes, tried in this order. The first healthy one is the live source.
+# Use the node's REST API address (default port 9053). Full UTXO nodes with
+# `extraIndex = true` give token names and index-health checks.
+[[node]]
+url = "http://192.168.1.50:9053"
+name = "node-a"
+
+[[node]]
+url = "http://192.168.1.51:9053"
+name = "node-b"
+
+# Public explorers: backup when no node is healthy, and a cross-check in the Sources view (key 3).
+# Built-in names: "p2p", "public". A full URL also works. Use [] to disable explorers.
+[explorers]
+enabled = ["p2p", "public"]
+
+[ui]
+theme = "neon-green"      # neon-green | amber-terminal | blue-ice | high-contrast
+fps = 30                  # 1–120
+start_view = "packing"    # dashboard | packing | sources
+motion = true             # false: no animations (also toggled with `m`)
