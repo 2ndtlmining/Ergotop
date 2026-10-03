@@ -187,13 +187,19 @@ impl Visualizer {
             let prev = self.sprites.remove(&p.id);
             let tween = match &prev {
                 _ if !animate => Tween::at_rest(to),
-                None => anim::gravity_drop((to.0, top), to, now_ms, self.height),
+                // New arrivals wait (above the block, invisible) until a busy slot has cleared.
+                None => {
+                    anim::gravity_drop((to.0, top), to, settle_at.unwrap_or(now_ms), self.height)
+                }
                 Some(s) if (s.x, s.target_y) == (p.x, p.y) => s.tween,
                 Some(s) => {
                     let cur = s.pos(now_ms);
+                    // Only resting sprites wait for the avalanche; one still moving keeps moving.
                     let start = match settle_at {
-                        Some(t) => t + anim::avalanche_delay(p.x, self.width),
-                        None => now_ms,
+                        Some(t) if s.tween.done(now_ms) => {
+                            t + anim::avalanche_delay(p.x, self.width)
+                        }
+                        _ => now_ms,
                     };
                     if s.x == p.x && to.1 <= cur.1 {
                         anim::gravity_drop(cur, to, start, self.height)
@@ -246,7 +252,16 @@ impl Visualizer {
         }
     }
 
-    fn exit(&mut self, ids: &[TxId], now_ms: u64, state: impl Fn(u64) -> State, hold_ms: u64) {
+    /// Moves `ids` out of their slots into an exit animation lasting `hold_ms`; the rest of the
+    /// block settles `settle_ms` from now (the latest pending exit wins).
+    fn exit(
+        &mut self,
+        ids: &[TxId],
+        now_ms: u64,
+        state: impl Fn(u64) -> State,
+        hold_ms: u64,
+        settle_ms: u64,
+    ) {
         let mut any = false;
         for id in ids {
             if let Some(mut s) = self.sprites.remove(id) {
@@ -259,7 +274,8 @@ impl Visualizer {
             }
         }
         if any && self.motion {
-            self.avalanche_at = Some(now_ms + hold_ms);
+            let at = now_ms + settle_ms;
+            self.avalanche_at = Some(self.avalanche_at.map_or(at, |a| a.max(at)));
         }
     }
 
@@ -269,11 +285,18 @@ impl Visualizer {
             now_ms,
             |until_ms| State::Flashing { until_ms },
             FLASH_MS,
+            FLASH_MS + anim::LAUNCH_MS,
         );
     }
 
     pub fn on_dropped(&mut self, ids: &[TxId], now_ms: u64) {
-        self.exit(ids, now_ms, |until_ms| State::Fading { until_ms }, FADE_MS);
+        self.exit(
+            ids,
+            now_ms,
+            |until_ms| State::Fading { until_ms },
+            FADE_MS,
+            FADE_MS,
+        );
     }
 
     /// Pending sprites past `PENDING_HOLD_MS` fade out; returns their ids.
@@ -452,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn avalanche_starts_after_the_flash_left_columns_first() {
+    fn avalanche_starts_after_the_launch_left_columns_first() {
         let mut v = Visualizer::new();
         v.set_size(6, 40);
         v.relayout(
@@ -465,14 +488,6 @@ mod tests {
             0,
             true,
         );
-        assert_eq!(
-            (v.sprite("c").unwrap().x, v.sprite("c").unwrap().target_y),
-            (0, 6)
-        );
-        assert_eq!(
-            (v.sprite("d").unwrap().x, v.sprite("d").unwrap().target_y),
-            (2, 6)
-        );
         v.on_mined(&ids(&["a"]), 1_000);
         v.relayout(
             &[item("c", 400, 4000), item("d", 400, 4000)],
@@ -482,11 +497,73 @@ mod tests {
         );
         let c = v.sprite("c").unwrap().clone();
         let d = v.sprite("d").unwrap().clone();
-        assert_eq!(c.pos(1_399).1, 6.0, "waits for the flash");
-        assert!(c.pos(1_450).1 < 6.0, "left column falls first");
-        assert_eq!(d.pos(1_450).1, 6.0, "right column still waiting");
-        assert_eq!(c.pos(5_000), (0.0, 0.0));
-        assert_eq!(d.pos(5_000), (2.0, 0.0));
+        let settle = 1_000 + FLASH_MS + crate::anim::LAUNCH_MS;
+        assert_eq!(c.pos(settle - 1).1, 6.0, "waits for flash and launch");
+        assert!(c.pos(settle + 50).1 < 6.0, "left column falls first");
+        assert_eq!(d.pos(settle + 50).1, 6.0, "right column still waiting");
+        assert_eq!(c.pos(9_000), (0.0, 0.0));
+        assert_eq!(d.pos(9_000), (2.0, 0.0));
+    }
+
+    #[test]
+    fn a_sprite_still_falling_keeps_falling_when_a_block_lands() {
+        let mut v = Visualizer::new();
+        v.set_size(6, 40);
+        v.relayout(&[item("a", 20_000, 10_000_000)], CAP, 0, true);
+        v.relayout(
+            &[item("a", 20_000, 10_000_000), item("n", 400, 4000)],
+            CAP,
+            1_000,
+            false,
+        );
+        v.on_mined(&ids(&["a"]), 1_300);
+        v.relayout(&[item("n", 400, 4000)], CAP, 1_300, false);
+        let n = v.sprite("n").unwrap();
+        assert!(
+            n.pos(1_400).1 < n.pos(1_300).1,
+            "no mid-air hang while the avalanche waits"
+        );
+    }
+
+    #[test]
+    fn a_drop_in_the_same_batch_does_not_shorten_the_mined_wait() {
+        let mut v = Visualizer::new();
+        v.set_size(6, 40);
+        v.relayout(
+            &[
+                item("a", 20_000, 10_000_000),
+                item("b", 400, 5000),
+                item("c", 400, 4000),
+            ],
+            CAP,
+            0,
+            true,
+        );
+        v.on_mined(&ids(&["a"]), 1_000);
+        v.on_dropped(&ids(&["b"]), 1_000);
+        v.relayout(&[item("c", 400, 4000)], CAP, 1_000, false);
+        let c = v.sprite("c").unwrap();
+        let settle = 1_000 + FLASH_MS + crate::anim::LAUNCH_MS;
+        assert_eq!(
+            c.pos(settle - 1),
+            c.pos(1_000),
+            "still waiting while a flashes and launches"
+        );
+    }
+
+    #[test]
+    fn new_arrivals_wait_for_the_launch_before_falling() {
+        let mut v = Visualizer::new();
+        v.set_size(6, 40);
+        v.relayout(&[item("a", 20_000, 10_000_000)], CAP, 0, true);
+        v.on_mined(&ids(&["a"]), 1_000);
+        v.relayout(&[item("n", 400, 4000)], CAP, 1_000, false);
+        let n = v.sprite("n").unwrap();
+        assert_eq!(
+            n.pos(1_500).1,
+            40.0,
+            "held above the block while the slot is busy"
+        );
     }
 
     #[test]

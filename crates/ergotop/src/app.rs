@@ -215,6 +215,7 @@ impl App {
                     changed = true;
                 }
                 Update::Resynced => {
+                    self.leaving.clear();
                     changed = true;
                     animate = false;
                 }
@@ -264,7 +265,9 @@ impl App {
 
     pub fn relayout(&mut self, animate: bool) {
         let pool = self.rec.pool();
-        if animate {
+        // Pending tracking follows motion, not this relayout's animation: a resize or
+        // address-book reload must not lose txs that are waiting for their block.
+        if self.viz.motion {
             for s in self.viz.placed() {
                 if !pool.contains_key(&s.id) && !self.leaving.contains_key(&s.id) {
                     self.leaving.insert(
@@ -605,6 +608,11 @@ impl App {
             KeyCode::Char('m') => {
                 let on = !self.viz.motion;
                 self.viz.set_motion(on);
+                if !on {
+                    // Motion off: exits are immediate, so pending txs are cleared too.
+                    self.leaving.clear();
+                    self.relayout(false);
+                }
                 self.set_status(format!("Motion {}", if on { "on" } else { "off" }), now_ms);
                 Action::None
             }
@@ -1187,5 +1195,53 @@ mod tests {
             ..Default::default()
         };
         assert!(!App::new(&specs(), Default::default(), &ui).viz.motion);
+    }
+
+    #[test]
+    fn switching_views_keeps_pending_txs_so_their_block_still_launches() {
+        let mut app = sample_app();
+        app.on_source_event(
+            node_mempool(vec![tid("b2"), tid("c3"), tid("d4")], vec![]),
+            NOW + 1_000,
+        );
+        app.resize_viz(70, 14);
+        let a1 = app
+            .viz
+            .sprite(&tid("a1"))
+            .expect("still pending after a resize");
+        assert!(matches!(a1.state, crate::viz::State::Pending { .. }));
+        app.on_source_event(
+            block_with(1_886_102, vec!["cb2".into(), tid("a1")]),
+            NOW + 3_000,
+        );
+        let flashing = app
+            .viz
+            .sprites()
+            .filter(|s| matches!(s.state, crate::viz::State::Flashing { .. }))
+            .count();
+        assert_eq!(flashing, 1);
+    }
+
+    #[test]
+    fn motion_off_clears_pending_and_stops_tracking_it() {
+        let mut app = sample_app();
+        app.on_source_event(
+            node_mempool(vec![tid("b2"), tid("c3"), tid("d4")], vec![]),
+            NOW + 1_000,
+        );
+        assert!(app.viz.sprite(&tid("a1")).is_some());
+        app.on_key(key(KeyCode::Char('m')), NOW + 1_000);
+        assert!(
+            app.viz.sprite(&tid("a1")).is_none(),
+            "pending cleared when motion goes off"
+        );
+        app.on_source_event(
+            node_mempool(vec![tid("c3"), tid("d4")], vec![]),
+            NOW + 2_000,
+        );
+        assert!(
+            app.viz.sprite(&tid("b2")).is_none(),
+            "no new pending while motion is off"
+        );
     }
 }
