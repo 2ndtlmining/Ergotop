@@ -46,6 +46,8 @@ pub struct UiConfig {
     pub fps: u32,
     pub start_view: String,
     pub motion: bool,
+    /// Highlight txs moving at least this many ERG; 0 disables.
+    pub whale_erg: f64,
 }
 
 impl Default for UiConfig {
@@ -55,6 +57,7 @@ impl Default for UiConfig {
             fps: 30,
             start_view: "packing".into(),
             motion: true,
+            whale_erg: 10_000.0,
         }
     }
 }

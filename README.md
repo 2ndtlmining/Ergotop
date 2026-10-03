@@ -9,6 +9,7 @@ Written in Rust (ratatui + tokio). The previous Python/Textual version lives on 
 - **Your nodes first.** Polls your own Ergo nodes every second (only new transactions are fetched) and falls back to the public explorers automatically.
 - **Accurate.** Real fees (the fee output, no guesses), value excluding change, exact mined transactions per block, real `maxBlockSize` from the node, mined vs dropped told apart.
 - **Packing visualizer.** Transactions are selected for the next block by fee per byte, packed bottom-up like the Ergomempool web app, and animated: new ones fall in, mined ones flash and rise out. `l` toggles the ERG hexagon.
+- **Fee rates.** Every transaction's fee per byte (the default sort), mempool median / p90, and the lowest rate still making the next block when it is full. USD values when the ERG price is known; whale transactions are highlighted.
 - **Sources view.** Status, latency and transaction count for every node and explorer, plus the transactions only one source has.
 - **Address book.** Classifies transactions with the [ergexplorer.com address book](https://ergexplorer.com/addressbook) (cached, with an offline snapshot built in), your own `addresses.toml`, and built-in contract rules.
 - **Fast.** A full dashboard frame with 10,000 transactions renders in about 1.5 ms; the UI only redraws when something changes.
@@ -52,7 +53,7 @@ ergotop --log ergotop.log    # write diagnostics to a file
 | `1` `2` `3` | Dashboard / Packing / Sources |
 | `↑` `↓` `PgUp` `PgDn` | Move selection |
 | `Enter` | Transaction detail (Sources view: transactions only in that source) |
-| `s` | Cycle sort: fee → value → size → age → origin |
+| `s` | Cycle sort: fee rate (nanoERG/byte, default) → fee → value → size → age → origin |
 | `/` | Filter: name, kind (`exchange`), tx id prefix, `>100`, `<1` (ERG) |
 | `Esc` | Clear filter / close popup |
 | `c` | Copy tx id (OSC 52 — works over SSH in most terminals); Sources view: the source URL |
@@ -122,6 +123,7 @@ theme = "neon-green"
 fps = 30
 start_view = "packing"               # dashboard | packing | sources
 motion = true                        # false: no animations
+whale_erg = 10000                    # highlight txs moving at least this many ERG; 0 = off
 ```
 
 With no `[[node]]` entries Ergotop tries `http://127.0.0.1:9053`. Environment variables override the file: `ERGO_NODE_URL` (one node), `ERGO_API_URL` (one explorer).

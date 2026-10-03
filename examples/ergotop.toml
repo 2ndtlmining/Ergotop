@@ -26,3 +26,4 @@ theme = "neon-green"      # neon-green | amber-terminal | blue-ice | high-contra
 fps = 30                  # 1–120
 start_view = "packing"    # dashboard | packing | sources
 motion = true             # false: no animations (also toggled with `m`)
+whale_erg = 10000         # highlight txs moving at least this many ERG; 0 = off

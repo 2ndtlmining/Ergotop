@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ergotop_core::classify::{BookEntry, Builtin, Classifier};
 use ergotop_core::config::{AddressesFile, LocalAddress, SourceSpec, UiConfig};
-use ergotop_core::metrics::FEE_ADDRESS;
+use ergotop_core::metrics::{rate_stats, RateStats, FEE_ADDRESS};
 use ergotop_core::model::{
     nano_to_erg, Block, NodeInfo, SourceId, SourceKind, Token, TokenMeta, TxId,
 };
@@ -42,6 +42,7 @@ impl View {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortKey {
+    Rate,
     Fee,
     Value,
     Size,
@@ -52,16 +53,18 @@ pub enum SortKey {
 impl SortKey {
     pub fn next(self) -> SortKey {
         match self {
+            SortKey::Rate => SortKey::Fee,
             SortKey::Fee => SortKey::Value,
             SortKey::Value => SortKey::Size,
             SortKey::Size => SortKey::Age,
             SortKey::Age => SortKey::Origin,
-            SortKey::Origin => SortKey::Fee,
+            SortKey::Origin => SortKey::Rate,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
+            SortKey::Rate => "rate",
             SortKey::Fee => "fee",
             SortKey::Value => "value",
             SortKey::Size => "size",
@@ -94,6 +97,8 @@ pub struct App {
     local: Vec<LocalAddress>,
     pub tokens: HashMap<String, TokenMeta>,
     pub price: Option<f64>,
+    /// Txs moving at least this many nanoERG are highlighted; 0 disables.
+    pub whale_nano: u64,
     pub view: View,
     pub overlay: Overlay,
     pub filter: String,
@@ -156,11 +161,12 @@ impl App {
             local: addrs.address,
             tokens: HashMap::new(),
             price: None,
+            whale_nano: (ui.whale_erg.max(0.0) * 1e9) as u64,
             view: View::parse(&ui.start_view),
             overlay: Overlay::None,
             filter: String::new(),
             filtering: false,
-            sort: SortKey::Fee,
+            sort: SortKey::Rate,
             selected: 0,
             selected_id: None,
             source_sel: 0,
@@ -323,6 +329,10 @@ impl App {
             .filter(|e| matches_filter(e, &self.filter))
             .collect();
         match self.sort {
+            SortKey::Rate => v.sort_by(|a, b| {
+                let r = |e: &TxEntry| e.metrics.fee as u128 * 1000 / e.tx.size.max(1) as u128;
+                r(b).cmp(&r(a)).then_with(|| a.tx.id.cmp(&b.tx.id))
+            }),
             SortKey::Fee => v.sort_by(|a, b| {
                 b.metrics
                     .fee
@@ -360,6 +370,17 @@ impl App {
         let views = self.rec.views();
         let v = views.get(self.source_sel)?;
         self.source_urls.get(&v.id).cloned()
+    }
+
+    pub fn is_whale(&self, e: &TxEntry) -> bool {
+        self.whale_nano > 0 && e.metrics.value >= self.whale_nano
+    }
+
+    pub fn rate_stats(&self) -> Option<RateStats> {
+        rate_stats(
+            self.rec.pool().values().map(|e| (e.metrics.fee, e.tx.size)),
+            u64::from(self.max_block_size()),
+        )
     }
 
     pub fn selected_entry(&self) -> Option<&TxEntry> {
@@ -843,6 +864,9 @@ mod tests {
     #[test]
     fn rows_sort_by_each_key() {
         let mut app = sample_app();
+        assert_eq!(app.sort, SortKey::Rate, "fee rate is the default sort");
+        assert_eq!(ids(&app), vec!["c3", "a1", "b2", "d4"]);
+        app.sort = SortKey::Fee;
         assert_eq!(ids(&app), vec!["d4", "b2", "a1", "c3"]);
         app.sort = SortKey::Value;
         assert_eq!(ids(&app), vec!["d4", "a1", "b2", "c3"]);
@@ -850,6 +874,25 @@ mod tests {
         assert_eq!(ids(&app), vec!["d4", "b2", "a1", "c3"]);
         app.sort = SortKey::Origin;
         assert_eq!(app.rows()[0].class.class.name, "Contract");
+    }
+
+    #[test]
+    fn whales_are_txs_at_or_over_the_threshold() {
+        let mut app = sample_app();
+        let whales = |app: &App| {
+            let mut v: Vec<String> = app
+                .rows()
+                .iter()
+                .filter(|e| app.is_whale(e))
+                .map(|e| e.tx.id[..2].to_string())
+                .collect();
+            v.sort();
+            v
+        };
+        app.whale_nano = 12_000_000_000;
+        assert_eq!(whales(&app), vec!["a1", "d4"]);
+        app.whale_nano = 0;
+        assert!(whales(&app).is_empty(), "0 disables whale highlighting");
     }
 
     #[test]
@@ -877,7 +920,7 @@ mod tests {
         app.on_key(key(KeyCode::Char('2')), NOW);
         assert_eq!(app.view, View::Packing);
         app.on_key(key(KeyCode::Char('s')), NOW);
-        assert_eq!(app.sort, SortKey::Value);
+        assert_eq!(app.sort, SortKey::Fee);
         app.on_key(key(KeyCode::Char('?')), NOW);
         assert_eq!(app.overlay, Overlay::Help);
         app.on_key(key(KeyCode::Esc), NOW);
@@ -936,21 +979,21 @@ mod tests {
         let mut app = sample_app();
         assert_eq!(
             app.on_key(key(KeyCode::Char('c')), NOW),
-            Action::Copy(tid("d4"))
+            Action::Copy(tid("c3"))
         );
         assert!(app.status.as_ref().unwrap().0.starts_with("Copied"));
         assert_eq!(
             app.on_key(key(KeyCode::Char('e')), NOW),
             Action::Open(format!(
                 "https://explorer.ergoplatform.com/en/transactions/{}",
-                tid("d4")
+                tid("c3")
             ))
         );
         app.on_key(key(KeyCode::Enter), NOW);
         assert_eq!(app.overlay, Overlay::Detail);
         assert_eq!(
             app.on_key(key(KeyCode::Char('c')), NOW),
-            Action::Copy(tid("d4"))
+            Action::Copy(tid("c3"))
         );
     }
 
@@ -963,7 +1006,7 @@ mod tests {
             KeyEventKind::Release,
         );
         app.on_key(release, NOW);
-        assert_eq!(app.sort, SortKey::Fee);
+        assert_eq!(app.sort, SortKey::Rate);
     }
 
     #[test]
@@ -1150,6 +1193,7 @@ mod tests {
     #[test]
     fn detail_follows_the_selected_tx_when_rows_shift() {
         let mut app = sample_app();
+        app.sort = SortKey::Fee;
         app.on_key(key(KeyCode::Down), NOW);
         assert_eq!(app.selected_entry().unwrap().tx.id, tid("b2"));
         app.on_key(key(KeyCode::Enter), NOW);
@@ -1179,7 +1223,7 @@ mod tests {
         app.on_key(key(KeyCode::Enter), NOW);
         assert_eq!(app.overlay, Overlay::Detail);
         app.on_source_event(
-            node_mempool(vec![tid("a1"), tid("b2"), tid("c3")], vec![]),
+            node_mempool(vec![tid("a1"), tid("b2"), tid("d4")], vec![]),
             NOW + 1_000,
         );
         assert_eq!(app.overlay, Overlay::None, "no invisible popup left behind");
