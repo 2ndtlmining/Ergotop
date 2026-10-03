@@ -230,7 +230,7 @@ impl Visualizer {
         }
         for s in self.sprites() {
             let color = match s.phase {
-                Phase::Flashing { .. } if (now_ms / 100) % 2 == 0 => Color::White,
+                Phase::Flashing { .. } if (now_ms / 100).is_multiple_of(2) => Color::White,
                 _ if s.region == Region::Overflow => dim(s.color),
                 _ => s.color,
             };
