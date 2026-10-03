@@ -54,6 +54,17 @@ fn bench(c: &mut Criterion) {
             canvas.render(area, &mut buf);
         })
     });
+    let mut falling = Visualizer::new();
+    falling.set_size(W, H_CELLS * 2);
+    falling.relayout(&txs, 1_271_009, 0, false);
+    c.bench_function("render_frame_10k_falling", |b| {
+        b.iter(|| {
+            let mut canvas = Canvas::new(W, H_CELLS * 2);
+            falling.render(&mut canvas, 300, Color::Gray, Color::Blue);
+            let mut buf = Buffer::empty(area);
+            canvas.render(area, &mut buf);
+        })
+    });
 }
 
 fn tx(i: usize, seed: u64) -> Tx {
@@ -116,6 +127,15 @@ fn bench_dashboard(c: &mut Criterion) {
     c.bench_function("dashboard_frame_10k", |b| {
         b.iter(|| {
             term.draw(|f| ergotop::ui::draw(f, &mut app, 2_000))
+                .unwrap();
+        })
+    });
+    // Restart every sprite as a fresh fall (spawned at clock 1_000) and draw mid-fall.
+    app.viz.relayout(&[], 1_271_009, 1_000, true);
+    app.relayout(true);
+    c.bench_function("dashboard_frame_10k_falling", |b| {
+        b.iter(|| {
+            term.draw(|f| ergotop::ui::draw(f, &mut app, 1_300))
                 .unwrap();
         })
     });
