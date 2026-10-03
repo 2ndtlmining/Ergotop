@@ -206,4 +206,60 @@ pub(crate) mod tests {
         app.filter = "kuc".into();
         assert_contains(&screen(&mut app, 120, 30), &["/kuc"]);
     }
+
+    #[test]
+    fn sources_view_compares_sources() {
+        let mut app = sample_app();
+        app.view = View::Sources;
+        let s = screen(&mut app, 130, 30);
+        assert_contains(&s, &["SOURCES", "* node-a", "p2p", "Only here", "explorer", "6.0.1"]);
+        insta::assert_snapshot!("sources", s);
+    }
+
+    #[test]
+    fn sources_view_lists_txs_only_in_selected_source() {
+        let mut app = sample_app();
+        app.view = View::Sources;
+        app.show_only = true;
+        let s = screen(&mut app, 130, 30);
+        assert_contains(&s, &["ONLY IN node-a (2)", "c3000000", "d4000000"]);
+    }
+
+    #[test]
+    fn help_overlay_lists_keys() {
+        let mut app = sample_app();
+        app.overlay = crate::app::Overlay::Help;
+        let s = screen(&mut app, 120, 34);
+        assert_contains(&s, &["KEYS", "Cycle sort", "Toggle hexagon", "Quit"]);
+        insta::assert_snapshot!("help", s);
+    }
+
+    #[test]
+    fn detail_overlay_shows_inputs_outputs_and_names() {
+        let mut app = sample_app();
+        app.overlay = crate::app::Overlay::Detail;
+        app.filter = "kucoin".into();
+        let s = screen(&mut app, 120, 34);
+        assert_contains(
+            &s,
+            &["TRANSACTION", "a1000000", "Kucoin", "INPUTS (1)", "OUTPUTS (2)", "fee", "12.00", "c: copy id"],
+        );
+        let fee_line = s.lines().find(|l| l.contains("│  fee ")).expect("fee output line");
+        assert!(fee_line.contains("0.0015 ERG"), "small outputs must not round to zero: {fee_line}");
+        insta::assert_snapshot!("detail", s);
+    }
+
+    #[test]
+    fn tiny_terminal_never_panics() {
+        for view in [View::Dashboard, View::Packing, View::Sources] {
+            for overlay in [crate::app::Overlay::None, crate::app::Overlay::Help, crate::app::Overlay::Detail] {
+                let mut app = sample_app();
+                app.view = view;
+                app.overlay = overlay;
+                app.show_only = true;
+                screen(&mut app, 30, 8);
+                screen(&mut app, 1, 1);
+            }
+        }
+    }
 }

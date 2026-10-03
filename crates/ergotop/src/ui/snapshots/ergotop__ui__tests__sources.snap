@@ -1,0 +1,34 @@
+---
+source: crates/ergotop/src/ui/mod.rs
+expression: s
+---
+ ERGOTOP   Block #1,886,101  ERG $0.3262  4 tx · 22.3 KB  mempool 1% of block                                                     
+┌ SOURCES  (* active · ↑↓ select · Enter: txs only in source) ───────────────────────────────────────────────────────────────────┐
+│Source           Kind      Status                         Latency  Txs    Only here  Height      Index lag  Version             │
+│* node-a         node      up                             23ms     4      2          1,886,101   0          6.0.1               │
+│  p2p            explorer  up                             900ms    2      0          -           -          -                   │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+│                                                                                                                                │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ ● node-a  [node-a● p2p●]                                       1 2 3 views  / filter  s sort  c copy  e explorer  ? help  q quit
