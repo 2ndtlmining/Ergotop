@@ -12,7 +12,9 @@ fn items(n: usize) -> Vec<VizItem> {
     let mut seed: u64 = 42;
     (0..n)
         .map(|i| {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             VizItem {
                 id: format!("{i:064}"),
                 size_bytes: 200 + (seed >> 33) as u32 % 20_000,
