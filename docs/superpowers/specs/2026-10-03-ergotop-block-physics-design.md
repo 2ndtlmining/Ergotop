@@ -71,7 +71,7 @@ Coordinates are visualizer pixels, origin bottom-left (as today).
 | Id left the pool (present in viz, absent from pool) | becomes `Pending`: stays in place, drawn at half brightness, **still occupies its packed space**; excluded from the title counts |
 | `Mined` for a pending or resting id | `Flashing` 400 ms → `Launching` 700 ms → removed; then relayout without it; other sprites that move get `Gravity` drops with the avalanche stagger |
 | `Dropped` for a pending id, or pending for 20 s | `Fading` 300 ms → removed; then relayout (avalanche as above) |
-| Resync / resize / hexagon toggle / motion off | everything placed instantly (no tweens), pending/flashing/launching/fading cleared |
+| Resync / resize / motion off | everything placed instantly (no tweens), pending/flashing/launching/fading cleared |
 
 Pending sprites keep their space by staying in the packing input (as items flagged `pending`) until their outcome is known; this is what lets mined txs launch from where they were built and the avalanche happen after the launch.
 

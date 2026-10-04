@@ -60,7 +60,7 @@ fn fee_rate(i: &PackItem) -> u128 {
 }
 
 /// Per-column [lo, hi) vertical bounds of a region.
-fn mask(width: u16, height: u16, shape: Shape) -> (Vec<u16>, Vec<u16>) {
+pub fn shape_bounds(width: u16, height: u16, shape: Shape) -> (Vec<u16>, Vec<u16>) {
     let w = width as usize;
     match shape {
         Shape::Rect => (vec![0; w], vec![height; w]),
@@ -94,7 +94,7 @@ fn pack_region(
     height: u16,
     shape: Shape,
 ) -> (Vec<(usize, u16, u16)>, usize) {
-    let (lo, hi) = mask(width, height, shape);
+    let (lo, hi) = shape_bounds(width, height, shape);
     let mut sky = lo.clone();
     let mut out = Vec::with_capacity(items.len());
     let mut not_shown = 0;
