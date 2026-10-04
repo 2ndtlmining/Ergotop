@@ -53,6 +53,8 @@ pub struct UiConfig {
     pub sort_reversed: bool,
     /// rect | hexagon
     pub shape: String,
+    /// Recent filters (normally kept in state.toml, not set by hand).
+    pub filter_history: Vec<String>,
 }
 
 impl Default for UiConfig {
@@ -66,6 +68,7 @@ impl Default for UiConfig {
             sort: "rate".into(),
             sort_reversed: false,
             shape: "rect".into(),
+            filter_history: Vec::new(),
         }
     }
 }
@@ -161,6 +164,7 @@ pub struct UiState {
     pub sort_reversed: Option<bool>,
     pub motion: Option<bool>,
     pub shape: Option<String>,
+    pub filter_history: Option<Vec<String>>,
 }
 
 impl UiState {
@@ -183,6 +187,9 @@ impl UiState {
         }
         if let Some(v) = &self.shape {
             ui.shape = v.clone();
+        }
+        if let Some(v) = &self.filter_history {
+            ui.filter_history = v.clone();
         }
     }
 }

@@ -87,6 +87,8 @@ Press `/` and type space-separated terms; a transaction must match all of them. 
 | `token:sigusd`, `token:03faf2` | a box carrying a token with this name (contains) or id prefix |
 | `!term` | not `term`, e.g. `!p2p` |
 
+While typing a filter, `↑`/`↓` recall earlier ones (the last 20 are remembered in `state.toml`).
+
 Example: `spectrum >100 !age<30s` shows Spectrum transactions over 100 ERG that have been waiting at least 30 seconds.
 
 The status bar shows the active source and how fresh its data is: `● node-a · 1s ago` (your node), `○ explorer fallback: p2p · 3s ago`, `◐ node-a · stale 42s` (no update for over 10 s from a node or 30 s from an explorer; also shown in the TRANSACTIONS title), `✕ offline · data 1m 12s old` (no usable source, last data kept on screen), or `… connecting to sources`. Press `3` to see why a source is down.
