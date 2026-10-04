@@ -7,13 +7,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ergotop_core::classify::{BookEntry, Builtin, Classifier};
 use ergotop_core::config::{AddressesFile, LocalAddress, SourceSpec, UiConfig, UiState};
 use ergotop_core::metrics::{rate_stats, RateStats, FEE_ADDRESS};
-use ergotop_core::model::{
-    nano_to_erg, Block, NodeInfo, SourceId, SourceKind, Token, TokenMeta, TxId,
-};
+use ergotop_core::model::{Block, NodeInfo, SourceId, SourceKind, Token, TokenMeta, TxId};
 use ergotop_core::packing::Shape;
 use ergotop_core::reconcile::{Reconciler, TxEntry, Update};
 use ergotop_core::sources::SourceEvent;
 
+use crate::filter::Filter;
 use crate::format;
 use crate::theme::{rgb, Theme};
 use crate::viz::{Visualizer, VizItem};
@@ -184,33 +183,6 @@ fn sort_keyed<'a, K: Ord>(v: &mut Vec<&'a TxEntry>, key: impl Fn(&'a TxEntry) ->
     let mut keyed: Vec<(K, &'a TxEntry)> = v.drain(..).map(|e| (key(e), e)).collect();
     keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.tx.id.cmp(&b.1.tx.id)));
     v.extend(keyed.into_iter().map(|(_, e)| e));
-}
-
-fn matches_filter(e: &TxEntry, filter: &str) -> bool {
-    let f = filter.trim();
-    if f.is_empty() {
-        return true;
-    }
-    if let Some(n) = f
-        .strip_prefix('>')
-        .and_then(|s| s.trim().parse::<f64>().ok())
-    {
-        return nano_to_erg(e.metrics.value) >= n;
-    }
-    if let Some(n) = f
-        .strip_prefix('<')
-        .and_then(|s| s.trim().parse::<f64>().ok())
-    {
-        return nano_to_erg(e.metrics.value) <= n;
-    }
-    let f = f.to_lowercase();
-    e.class.class.name.to_lowercase().contains(&f)
-        || e.class.class.kind.label().to_lowercase().contains(&f)
-        || e.class
-            .from
-            .as_deref()
-            .is_some_and(|x| x.to_lowercase().contains(&f))
-        || e.tx.id.starts_with(&f)
 }
 
 impl App {
@@ -423,11 +395,12 @@ impl App {
     }
 
     pub fn rows(&self) -> Vec<&TxEntry> {
+        let filter = Filter::parse(&self.filter);
         let mut v: Vec<&TxEntry> = self
             .rec
             .pool()
             .values()
-            .filter(|e| matches_filter(e, &self.filter))
+            .filter(|e| filter.matches(e, self.clock_ms, &self.tokens))
             .collect();
         match self.sort {
             SortKey::Rate => sort_keyed(&mut v, |e| {
@@ -443,6 +416,11 @@ impl App {
             v.reverse();
         }
         v
+    }
+
+    /// Terms of the current filter that could not be parsed (they are ignored).
+    pub fn filter_errors(&self) -> Vec<String> {
+        Filter::parse(&self.filter).errors
     }
 
     /// ▼ for largest/oldest first, ▲ for smallest/newest first (origin: ▲ is A→Z).

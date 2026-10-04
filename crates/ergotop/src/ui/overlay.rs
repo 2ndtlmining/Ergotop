@@ -9,14 +9,21 @@ use super::{kv, origin_text, panel};
 use crate::app::{App, EXPLORER_TX_URL};
 use crate::format;
 
-const KEYS: [(&str, &str); 16] = [
+const KEYS: [(&str, &str); 17] = [
     ("1 2 3", "Dashboard / Packing / Sources"),
     ("↑ ↓ PgUp PgDn", "Move selection (detail: scroll)"),
     ("g G Home End", "Top / bottom"),
     ("Enter", "Transaction detail (Sources: txs only in source)"),
     ("s", "Cycle sort: rate → fee → value → size → age → origin"),
     ("S", "Reverse sort direction"),
-    ("/", "Filter: name, kind, tx id, >ERG, <ERG"),
+    (
+        "/",
+        "Filter: words, >100, fee>0.01, size<2k, rate>1k, age>5m",
+    ),
+    (
+        "",
+        "  origin:a,b  addr:9f..  token:sigusd  !not  (all must match)",
+    ),
     ("Esc", "Clear filter / close"),
     ("c", "Copy tx id (Sources: source URL)"),
     ("e", "Open tx in explorer (Sources: source URL)"),

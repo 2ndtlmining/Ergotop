@@ -172,7 +172,13 @@ fn status_bar(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
     let t = app.theme;
     let mut fg = t.primary;
     let left = if app.filtering {
-        format!(" /{}▏", app.filter)
+        let errors = app.filter_errors();
+        if let Some(first) = errors.first() {
+            fg = t.error;
+            format!(" /{}▏  ✕ {first}", app.filter)
+        } else {
+            format!(" /{}▏", app.filter)
+        }
     } else if let Some((msg, _)) = &app.status {
         format!(" {msg}")
     } else {
@@ -295,6 +301,20 @@ pub(crate) mod tests {
             !s.contains("NETWORK"),
             "narrow shows only visualizer + table:
 {s}"
+        );
+    }
+
+    #[test]
+    fn filter_shows_match_count_and_flags_bad_terms() {
+        let mut app = sample_app();
+        app.view = View::Dashboard;
+        app.filter = "contract".into();
+        assert_contains(&screen(&mut app, 140, 40), &["TRANSACTIONS 2/4"]);
+        app.filtering = true;
+        app.filter = "contract colour>3".into();
+        assert_contains(
+            &screen(&mut app, 140, 40),
+            &["✕ colour>3: unknown field colour"],
         );
     }
 
