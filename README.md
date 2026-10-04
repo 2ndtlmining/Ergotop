@@ -51,9 +51,11 @@ ergotop --log ergotop.log    # write diagnostics to a file
 | Key | Action |
 |---|---|
 | `1` `2` `3` | Dashboard / Packing / Sources |
-| `↑` `↓` `PgUp` `PgDn` | Move selection |
-| `Enter` | Transaction detail (Sources view: transactions only in that source) |
+| `↑` `↓` `PgUp` `PgDn` | Move selection (in the transaction popup: scroll) |
+| `g` `G` `Home` `End` | Top / bottom |
+| `Enter` | Transaction detail with its explorer link (Sources view: transactions only in that source) |
 | `s` | Cycle sort: fee rate (nanoERG/byte, default) → fee → value → size → age → origin |
+| `S` | Reverse the sort direction (▼/▲ shown on the column) |
 | `/` | Filter: name, kind (`exchange`), tx id prefix, `>100`, `<1` (ERG) |
 | `Esc` | Clear filter / close popup |
 | `c` | Copy tx id (OSC 52 — works over SSH in most terminals); Sources view: the source URL |
