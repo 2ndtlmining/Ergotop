@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, Overlay, View};
+use crate::app::{App, Freshness, Overlay, View};
 use crate::format;
 use crate::theme::Theme;
 
@@ -35,7 +35,7 @@ pub fn draw(f: &mut Frame, app: &mut App, now_ms: u64) {
         View::Packing => packing::draw(f, body, app, now_ms),
         View::Sources => sources::draw(f, body, app),
     }
-    status_bar(f, foot, app);
+    status_bar(f, foot, app, now_ms);
     match app.overlay {
         Overlay::Help => overlay::help(f, area, app),
         Overlay::Detail => overlay::detail(f, area, app, now_ms),
@@ -133,19 +133,30 @@ fn header(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
     );
 }
 
-fn status_bar(f: &mut Frame, area: Rect, app: &App) {
+fn status_bar(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
     let t = app.theme;
+    let mut fg = t.primary;
     let left = if app.filtering {
         format!(" /{}▏", app.filter)
     } else if let Some((msg, _)) = &app.status {
         format!(" {msg}")
     } else {
-        app.source_summary()
+        fg = match app.freshness(now_ms) {
+            Freshness::Stale(_) => t.warning,
+            Freshness::Offline(_) => t.error,
+            Freshness::Connecting | Freshness::Live(_) => t.primary,
+        };
+        app.source_summary(now_ms)
     };
     let hint_w = (HINTS.chars().count() as u16).min(area.width.saturating_sub(30));
     let [l, r] = Layout::horizontal([Constraint::Min(0), Constraint::Length(hint_w)]).areas(area);
+    // The per-source dots are a bonus; drop them rather than cut them mid-list.
+    let left = match left.find("  [") {
+        Some(i) if left.chars().count() > l.width as usize => left[..i].to_string(),
+        _ => left,
+    };
     f.render_widget(
-        Paragraph::new(left).style(Style::new().bg(t.panel_bg).fg(t.primary)),
+        Paragraph::new(left).style(Style::new().bg(t.panel_bg).fg(fg)),
         l,
     );
     f.render_widget(

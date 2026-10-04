@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, Instant};
 
 use super::addressbook;
@@ -38,6 +38,46 @@ impl Default for Timing {
             node_headers: Duration::from_secs(5),
             explorer_mempool: Duration::from_secs(5),
             explorer_blocks: Duration::from_secs(10),
+        }
+    }
+}
+
+/// Asks every poll loop to poll now instead of waiting out its interval or backoff.
+/// A watch channel, so a refresh sent while a loop is mid-request is not lost.
+pub struct Refresh(watch::Sender<()>);
+
+impl Refresh {
+    pub fn new() -> Refresh {
+        Refresh(watch::channel(()).0)
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<()> {
+        self.0.subscribe()
+    }
+
+    pub fn now(&self) {
+        self.0.send_replace(());
+    }
+}
+
+impl Default for Refresh {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Sleeps for `d` unless a refresh arrives first; true when woken by a refresh.
+async fn pause(d: Duration, refresh: &mut watch::Receiver<()>) -> bool {
+    tokio::select! {
+        _ = sleep(d) => false,
+        r = refresh.changed() => {
+            if r.is_err() {
+                // No Refresh handle any more: plain sleep.
+                sleep(d).await;
+                false
+            } else {
+                true
+            }
         }
     }
 }
@@ -88,6 +128,7 @@ pub async fn run_node(
     client: NodeClient,
     timing: Timing,
     tx: mpsc::Sender<SourceEvent>,
+    mut refresh: watch::Receiver<()>,
 ) {
     let mut known: HashSet<TxId> = HashSet::new();
     let mut seen_tokens: HashSet<String> = HashSet::new();
@@ -125,7 +166,7 @@ pub async fn run_node(
                 Err(e) => {
                     fails += 1;
                     report_failure(&tx, &id, fails, &e).await;
-                    sleep(backoff(fails)).await;
+                    pause(backoff(fails), &mut refresh).await;
                     continue;
                 }
             }
@@ -182,7 +223,7 @@ pub async fn run_node(
                 fails += 1;
                 report_failure(&tx, &id, fails, &e).await;
                 next_info = Instant::now();
-                sleep(backoff(fails)).await;
+                pause(backoff(fails), &mut refresh).await;
                 continue;
             }
         }
@@ -208,7 +249,10 @@ pub async fn run_node(
             next_headers = Instant::now() + timing.node_headers;
         }
 
-        sleep(timing.node_mempool).await;
+        if pause(timing.node_mempool, &mut refresh).await {
+            next_info = Instant::now();
+            next_headers = Instant::now();
+        }
     }
 }
 
@@ -230,6 +274,7 @@ pub async fn run_explorer(
     client: ExplorerClient,
     timing: Timing,
     tx: mpsc::Sender<SourceEvent>,
+    mut refresh: watch::Receiver<()>,
 ) {
     let mut known: HashSet<TxId> = HashSet::new();
     let mut last_height: u32 = 0;
@@ -283,7 +328,7 @@ pub async fn run_explorer(
                 fails += 1;
                 last_status = None;
                 report_failure(&tx, &id, fails, &e).await;
-                sleep(backoff(fails)).await;
+                pause(backoff(fails), &mut refresh).await;
                 continue;
             }
         }
@@ -309,7 +354,9 @@ pub async fn run_explorer(
             next_blocks = Instant::now() + timing.explorer_blocks;
         }
 
-        sleep(timing.explorer_mempool).await;
+        if pause(timing.explorer_mempool, &mut refresh).await {
+            next_blocks = Instant::now();
+        }
     }
 }
 
@@ -365,8 +412,9 @@ pub fn spawn_all(
     specs: &[SourceSpec],
     timing: Timing,
     cache_dir: Option<PathBuf>,
-) -> mpsc::Receiver<SourceEvent> {
+) -> (mpsc::Receiver<SourceEvent>, Refresh) {
     let (tx, rx) = mpsc::channel(1024);
+    let refresh = Refresh::new();
     let http = http_client();
     for s in specs {
         match s.kind {
@@ -376,6 +424,7 @@ pub fn spawn_all(
                     NodeClient::new(http.clone(), &s.url),
                     timing,
                     tx.clone(),
+                    refresh.subscribe(),
                 ));
             }
             SourceKind::Explorer => {
@@ -384,6 +433,7 @@ pub fn spawn_all(
                     ExplorerClient::new(http.clone(), &s.url),
                     timing,
                     tx.clone(),
+                    refresh.subscribe(),
                 ));
             }
         }
@@ -396,7 +446,7 @@ pub fn spawn_all(
         tx.clone(),
     ));
     tokio::spawn(run_price(http, tx));
-    rx
+    (rx, refresh)
 }
 
 #[cfg(test)]
@@ -405,6 +455,10 @@ mod tests {
     use crate::sources::http_client;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn no_refresh() -> watch::Receiver<()> {
+        watch::channel(()).1
+    }
 
     fn fast() -> Timing {
         let ms = Duration::from_millis(50);
@@ -559,6 +613,7 @@ mod tests {
             NodeClient::new(http_client(), &s.uri()),
             fast(),
             tx,
+            no_refresh(),
         ));
         let events = collect(&mut rx, vec!["status", "info", "mempool", "block", "token"]).await;
         handle.abort();
@@ -589,7 +644,13 @@ mod tests {
     async fn node_loop_reports_down_for_unreachable_node() {
         let (tx, mut rx) = mpsc::channel(8);
         let client = NodeClient::new(http_client(), "http://127.0.0.1:9");
-        let handle = tokio::spawn(run_node(SourceId("dead".into()), client, fast(), tx));
+        let handle = tokio::spawn(run_node(
+            SourceId("dead".into()),
+            client,
+            fast(),
+            tx,
+            no_refresh(),
+        ));
         let events = collect(&mut rx, vec!["status"]).await;
         handle.abort();
         assert!(matches!(
@@ -643,6 +704,7 @@ mod tests {
             ExplorerClient::new(http_client(), &s.uri()),
             fast(),
             tx,
+            no_refresh(),
         ));
         let first = collect(&mut rx, vec!["mempool", "block"]).await;
         let second = collect(&mut rx, vec!["mempool"]).await;
@@ -661,6 +723,45 @@ mod tests {
             0,
             "already-sent bodies are not resent"
         );
+    }
+
+    #[tokio::test]
+    async fn refresh_wakes_a_sleeping_poll_loop() {
+        let s = MockServer::start().await;
+        mock(
+            &s,
+            "GET",
+            "/transactions/unconfirmed",
+            200,
+            include_str!("../../tests/fixtures/explorer/unconfirmed.json"),
+        )
+        .await;
+        mock(&s, "GET", "/api/v1/blocks", 200, r#"{"items":[]}"#).await;
+        let slow = Timing {
+            explorer_mempool: Duration::from_secs(600),
+            ..fast()
+        };
+        let refresh = Refresh::new();
+        let (tx, mut rx) = mpsc::channel(64);
+        let handle = tokio::spawn(run_explorer(
+            SourceId("p2p".into()),
+            ExplorerClient::new(http_client(), &s.uri()),
+            slow,
+            tx,
+            refresh.subscribe(),
+        ));
+        collect(&mut rx, vec!["mempool"]).await;
+        refresh.now();
+        let again = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(SourceEvent::Mempool { .. }) = rx.recv().await {
+                    break;
+                }
+            }
+        })
+        .await;
+        handle.abort();
+        assert!(again.is_ok(), "refresh did not trigger a poll");
     }
 
     #[tokio::test]
@@ -719,6 +820,7 @@ mod tests {
             ExplorerClient::new(http_client(), &s.uri()),
             fast(),
             tx,
+            no_refresh(),
         ));
         let events = collect(&mut rx, vec!["mempool"]).await;
         handle.abort();
@@ -744,6 +846,7 @@ mod tests {
             ExplorerClient::new(http_client(), &s.uri()),
             fast(),
             tx,
+            no_refresh(),
         ));
         let events = collect(&mut rx, vec!["status"]).await;
         handle.abort();
@@ -816,6 +919,7 @@ mod tests {
             NodeClient::new(http_client(), &s.uri()),
             fast(),
             tx,
+            no_refresh(),
         ));
         let deadline = tokio::time::Instant::now() + Duration::from_millis(2000);
         let mut mempools = 0;
@@ -869,6 +973,7 @@ mod tests {
             ExplorerClient::new(http_client(), &s.uri()),
             fast(),
             tx,
+            no_refresh(),
         ));
         let events = collect(&mut rx, vec!["mempool", "status"]).await;
         handle.abort();

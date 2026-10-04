@@ -73,7 +73,7 @@ fn describe(rec: &Reconciler, cls: &Classifier, u: &Update) -> Vec<String> {
 
 pub async fn run(cfg: Config, addrs: AddressesFile) -> anyhow::Result<()> {
     let specs = cfg.sources();
-    let mut rx = spawn_all(&specs, Timing::default(), cache_dir());
+    let (mut rx, _refresh) = spawn_all(&specs, Timing::default(), cache_dir());
     let builtin = Builtin::load();
     let mut book: Vec<BookEntry> = Vec::new();
     let mut cls = Classifier::new(&builtin, &book, &addrs.address);

@@ -63,10 +63,11 @@ ergotop --log ergotop.log    # write diagnostics to a file
 | `l` | Toggle hexagon packing |
 | `t` | Cycle theme (neon-green, amber-terminal, blue-ice, high-contrast) |
 | `m` | Toggle motion (animations on/off) |
+| `r` | Refresh all sources now (also cuts a failure backoff short) |
 | `?` | Help |
 | `q` | Quit |
 
-The status bar shows the active source: `● node-a` (your node), `○ explorer fallback: p2p`, `… connecting to sources`, or `✕ no data source` (press `3` to see why).
+The status bar shows the active source and how fresh its data is: `● node-a · 1s ago` (your node), `○ explorer fallback: p2p · 3s ago`, `◐ node-a · stale 42s` (no update for over 10 s from a node or 30 s from an explorer; also shown in the TRANSACTIONS title), `✕ offline · data 1m 12s old` (no usable source, last data kept on screen), or `… connecting to sources`. Press `3` to see why a source is down.
 
 A terminal with true-color support is recommended (Windows Terminal, iTerm2, most Linux terminals).
 
