@@ -22,7 +22,7 @@ const KEYS: [(&str, &str); 17] = [
     ),
     (
         "",
-        "  origin:a,b  addr:9f..  token:sigusd  !not  (all must match)",
+        "  origin:a,b  addr:9f..  token:sigusd  !not  · ↑↓ history",
     ),
     ("Esc", "Clear filter / close"),
     ("c", "Copy tx id (Sources: source URL)"),
@@ -46,17 +46,33 @@ fn centered(area: Rect, w_pct: u16, h_pct: u16) -> Rect {
     )
 }
 
-pub fn help(f: &mut Frame, area: Rect, app: &App) {
-    let r = centered(area, 70, 70);
+/// Renders `lines` in a popup scrolled by `app.overlay_scroll`, clamped to the content
+/// so Up right after End moves at once; the title says when there is more.
+fn scrolled(f: &mut Frame, r: Rect, app: &mut App, title: &str, lines: Vec<Line<'static>>) {
+    let max_scroll = (lines.len() as u16).saturating_sub(r.height.saturating_sub(2));
+    let scroll = app.overlay_scroll.min(max_scroll);
+    let title = if max_scroll > 0 {
+        format!("{title}  ↑↓ scroll {scroll}/{max_scroll}")
+    } else {
+        title.to_string()
+    };
+    f.render_widget(Clear, r);
+    f.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll, 0))
+            .block(panel(title, &app.theme)),
+        r,
+    );
+    app.overlay_scroll = scroll;
+}
+
+pub fn help(f: &mut Frame, area: Rect, app: &mut App) {
+    let r = centered(area, 70, 80);
     let lines: Vec<Line> = KEYS
         .iter()
         .map(|(k, d)| Line::from(format!("{k:<14} {d}")))
         .collect();
-    f.render_widget(Clear, r);
-    f.render_widget(
-        Paragraph::new(lines).block(panel("KEYS".into(), &app.theme)),
-        r,
-    );
+    scrolled(f, r, app, "KEYS", lines);
 }
 
 pub fn detail(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
@@ -153,20 +169,5 @@ pub fn detail(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
         "c: copy id · e: open in explorer · Esc: close",
         Style::new().fg(t.dim),
     )));
-    // Clamp so Up right after End moves at once; the title says when there is more.
-    let max_scroll = (lines.len() as u16).saturating_sub(r.height.saturating_sub(2));
-    let scroll = app.detail_scroll.min(max_scroll);
-    let title = if max_scroll > 0 {
-        format!("TRANSACTION  ↑↓ scroll {}/{}", scroll, max_scroll)
-    } else {
-        "TRANSACTION".into()
-    };
-    f.render_widget(Clear, r);
-    f.render_widget(
-        Paragraph::new(lines)
-            .scroll((scroll, 0))
-            .block(panel(title, &t)),
-        r,
-    );
-    app.detail_scroll = scroll;
+    scrolled(f, r, app, "TRANSACTION", lines);
 }

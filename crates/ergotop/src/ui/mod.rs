@@ -319,6 +319,17 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn help_scrolls_on_short_terminals() {
+        let mut app = sample_app();
+        app.overlay = crate::app::Overlay::Help;
+        let s = screen(&mut app, 100, 22);
+        assert_contains(&s, &["↑↓ scroll"]);
+        assert!(!s.contains("Quit"), "last line is below the fold");
+        app.overlay_scroll = u16::MAX;
+        assert_contains(&screen(&mut app, 100, 22), &["Quit"]);
+    }
+
+    #[test]
     fn header_drops_whole_segments_when_narrow() {
         let mut app = sample_app();
         app.view = View::Packing;
@@ -469,10 +480,10 @@ pub(crate) mod tests {
         assert_contains(&s, &[url.as_str()]);
         // A short terminal cannot show the whole tx: the title says it scrolls,
         // and End clamps to the last page so Up moves right away.
-        app.detail_scroll = u16::MAX;
+        app.overlay_scroll = u16::MAX;
         let s = screen(&mut app, 120, 16);
         assert_contains(&s, &["↑↓ scroll", "Esc: close"]);
-        let bottom = app.detail_scroll;
+        let bottom = app.overlay_scroll;
         assert!(bottom > 0 && bottom < 30, "clamped, got {bottom}");
     }
 

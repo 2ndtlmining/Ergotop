@@ -22,6 +22,7 @@ pub const DEFAULT_MAX_BLOCK_SIZE: u32 = 1_271_009;
 const STATUS_MS: u64 = 3_000;
 const BLOCK_FLASH_MS: u64 = 1_500;
 const PAGE: usize = 10;
+const FILTER_HISTORY: usize = 20;
 pub const EXPLORER_TX_URL: &str = "https://explorer.ergoplatform.com/en/transactions/";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,11 +146,14 @@ pub struct App {
     pub overlay: Overlay,
     pub filter: String,
     pub filtering: bool,
+    /// Applied filters, oldest first; Up/Down recall them while typing a filter.
+    pub filter_history: Vec<String>,
+    history_pos: Option<usize>,
     pub sort: SortKey,
     /// Sort opposite to the key's natural direction (`S`).
     pub sort_reversed: bool,
-    /// First visible line of the detail popup; clamped to its content when drawn.
-    pub detail_scroll: u16,
+    /// First visible line of the open popup; clamped to its content when drawn.
+    pub overlay_scroll: u16,
     pub selected: usize,
     /// The selected tx; `selected` is re-derived from it whenever rows change.
     selected_id: Option<TxId>,
@@ -202,9 +206,11 @@ impl App {
             overlay: Overlay::None,
             filter: String::new(),
             filtering: false,
+            filter_history: ui.filter_history.clone(),
+            history_pos: None,
             sort: SortKey::parse(&ui.sort),
             sort_reversed: ui.sort_reversed,
-            detail_scroll: 0,
+            overlay_scroll: 0,
             selected: 0,
             selected_id: None,
             source_sel: 0,
@@ -240,6 +246,7 @@ impl App {
             sort: Some(self.sort.label().to_string()),
             sort_reversed: Some(self.sort_reversed),
             motion: Some(self.viz.motion),
+            filter_history: Some(self.filter_history.clone()),
             shape: Some(
                 match self.viz.shape {
                     Shape::Rect => "rect",
@@ -683,11 +690,20 @@ impl App {
                     self.filter.clear();
                     self.filtering = false;
                 }
-                KeyCode::Enter => self.filtering = false,
+                KeyCode::Enter => {
+                    self.filtering = false;
+                    self.remember_filter();
+                }
+                KeyCode::Up => self.recall_filter(-1),
+                KeyCode::Down => self.recall_filter(1),
                 KeyCode::Backspace => {
                     self.filter.pop();
+                    self.history_pos = None;
                 }
-                KeyCode::Char(c) => self.filter.push(c),
+                KeyCode::Char(c) => {
+                    self.filter.push(c);
+                    self.history_pos = None;
+                }
                 _ => {}
             }
             self.clamp_selection();
@@ -700,28 +716,28 @@ impl App {
                     return Action::None;
                 }
                 KeyCode::Char('c') | KeyCode::Char('e') if self.overlay == Overlay::Detail => {}
-                KeyCode::Up | KeyCode::Char('k') if self.overlay == Overlay::Detail => {
-                    self.scroll_detail(-1);
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.scroll_overlay(-1);
                     return Action::None;
                 }
-                KeyCode::Down | KeyCode::Char('j') if self.overlay == Overlay::Detail => {
-                    self.scroll_detail(1);
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.scroll_overlay(1);
                     return Action::None;
                 }
-                KeyCode::PageUp if self.overlay == Overlay::Detail => {
-                    self.scroll_detail(-(PAGE as i64));
+                KeyCode::PageUp => {
+                    self.scroll_overlay(-(PAGE as i64));
                     return Action::None;
                 }
-                KeyCode::PageDown if self.overlay == Overlay::Detail => {
-                    self.scroll_detail(PAGE as i64);
+                KeyCode::PageDown => {
+                    self.scroll_overlay(PAGE as i64);
                     return Action::None;
                 }
-                KeyCode::Home | KeyCode::Char('g') if self.overlay == Overlay::Detail => {
-                    self.detail_scroll = 0;
+                KeyCode::Home | KeyCode::Char('g') => {
+                    self.overlay_scroll = 0;
                     return Action::None;
                 }
-                KeyCode::End | KeyCode::Char('G') if self.overlay == Overlay::Detail => {
-                    self.detail_scroll = u16::MAX;
+                KeyCode::End | KeyCode::Char('G') => {
+                    self.overlay_scroll = u16::MAX;
                     return Action::None;
                 }
                 _ => return Action::None,
@@ -743,7 +759,7 @@ impl App {
                     self.show_only = !self.show_only;
                 } else if self.selected_entry().is_some() {
                     self.overlay = Overlay::Detail;
-                    self.detail_scroll = 0;
+                    self.overlay_scroll = 0;
                 }
                 Action::None
             }
@@ -758,6 +774,7 @@ impl App {
             }
             KeyCode::Char('/') => {
                 self.filtering = true;
+                self.history_pos = None;
                 Action::None
             }
             KeyCode::Esc => {
@@ -815,6 +832,7 @@ impl App {
             }
             KeyCode::Char('?') => {
                 self.overlay = Overlay::Help;
+                self.overlay_scroll = 0;
                 Action::None
             }
             _ => Action::None,
@@ -823,9 +841,41 @@ impl App {
         action
     }
 
-    fn scroll_detail(&mut self, delta: i64) {
-        let cur = i64::from(self.detail_scroll.min(u16::MAX - 1));
-        self.detail_scroll = (cur + delta).clamp(0, i64::from(u16::MAX - 1)) as u16;
+    /// Saves the applied filter as the newest history entry (deduped, at most 20).
+    fn remember_filter(&mut self) {
+        let f = self.filter.trim().to_string();
+        self.history_pos = None;
+        if f.is_empty() {
+            return;
+        }
+        self.filter_history.retain(|h| *h != f);
+        self.filter_history.push(f);
+        let excess = self.filter_history.len().saturating_sub(FILTER_HISTORY);
+        self.filter_history.drain(..excess);
+    }
+
+    /// Steps through the history: -1 = older, +1 = newer; past the newest clears.
+    fn recall_filter(&mut self, step: i64) {
+        let n = self.filter_history.len();
+        if n == 0 {
+            return;
+        }
+        let pos = match (self.history_pos, step < 0) {
+            (None, true) => Some(n - 1),
+            (None, false) => None,
+            (Some(p), true) => Some(p.saturating_sub(1)),
+            (Some(p), false) if p + 1 < n => Some(p + 1),
+            (Some(_), false) => None,
+        };
+        self.history_pos = pos;
+        self.filter = pos
+            .map(|p| self.filter_history[p].clone())
+            .unwrap_or_default();
+    }
+
+    fn scroll_overlay(&mut self, delta: i64) {
+        let cur = i64::from(self.overlay_scroll.min(u16::MAX - 1));
+        self.overlay_scroll = (cur + delta).clamp(0, i64::from(u16::MAX - 1)) as u16;
     }
 
     fn set_view(&mut self, view: View) -> Action {
@@ -1078,15 +1128,19 @@ mod tests {
         app.on_key(key(KeyCode::Enter), NOW);
         app.on_key(key(KeyCode::Down), NOW);
         app.on_key(key(KeyCode::PageDown), NOW);
-        assert_eq!(app.detail_scroll, 1 + PAGE as u16);
+        assert_eq!(app.overlay_scroll, 1 + PAGE as u16);
         assert_eq!(app.selected, 0);
         app.on_key(key(KeyCode::Home), NOW);
-        assert_eq!(app.detail_scroll, 0);
+        assert_eq!(app.overlay_scroll, 0);
         app.on_key(key(KeyCode::End), NOW);
-        assert_eq!(app.detail_scroll, u16::MAX, "clamped to content when drawn");
+        assert_eq!(
+            app.overlay_scroll,
+            u16::MAX,
+            "clamped to content when drawn"
+        );
         app.on_key(key(KeyCode::Esc), NOW);
         app.on_key(key(KeyCode::Enter), NOW);
-        assert_eq!(app.detail_scroll, 0, "reopening starts at the top");
+        assert_eq!(app.overlay_scroll, 0, "reopening starts at the top");
     }
 
     #[test]
@@ -1386,6 +1440,56 @@ mod tests {
         app.on_key(key(KeyCode::Char('s')), NOW);
         assert_eq!(app.ui_state().sort.as_deref(), Some("size"));
         assert_eq!(app.ui_state().sort_reversed, Some(false));
+    }
+
+    #[test]
+    fn help_popup_scrolls_and_reopens_at_top() {
+        let mut app = sample_app();
+        app.on_key(key(KeyCode::Char('?')), NOW);
+        app.on_key(key(KeyCode::Down), NOW);
+        app.on_key(key(KeyCode::Down), NOW);
+        assert_eq!(app.overlay_scroll, 2);
+        assert_eq!(app.selected, 0, "the list behind does not move");
+        app.on_key(key(KeyCode::Esc), NOW);
+        app.on_key(key(KeyCode::Char('?')), NOW);
+        assert_eq!(app.overlay_scroll, 0);
+    }
+
+    #[test]
+    fn filter_history_recalls_previous_filters_and_is_remembered() {
+        let mut app = sample_app();
+        let type_filter = |app: &mut App, text: &str| {
+            app.on_key(key(KeyCode::Esc), NOW);
+            app.on_key(key(KeyCode::Char('/')), NOW);
+            for c in text.chars() {
+                app.on_key(key(KeyCode::Char(c)), NOW);
+            }
+            app.on_key(key(KeyCode::Enter), NOW);
+        };
+        type_filter(&mut app, "kucoin");
+        type_filter(&mut app, ">10");
+        type_filter(&mut app, "kucoin");
+        assert_eq!(
+            app.filter_history,
+            vec![">10", "kucoin"],
+            "deduped, newest last"
+        );
+        app.on_key(key(KeyCode::Esc), NOW);
+        app.on_key(key(KeyCode::Char('/')), NOW);
+        app.on_key(key(KeyCode::Up), NOW);
+        assert_eq!(app.filter, "kucoin");
+        app.on_key(key(KeyCode::Up), NOW);
+        assert_eq!(app.filter, ">10");
+        app.on_key(key(KeyCode::Up), NOW);
+        assert_eq!(app.filter, ">10", "stops at the oldest");
+        app.on_key(key(KeyCode::Down), NOW);
+        assert_eq!(app.filter, "kucoin");
+        app.on_key(key(KeyCode::Down), NOW);
+        assert_eq!(app.filter, "", "past the newest is an empty line");
+        assert_eq!(
+            app.ui_state().filter_history,
+            Some(vec![">10".to_string(), "kucoin".to_string()])
+        );
     }
 
     #[test]
