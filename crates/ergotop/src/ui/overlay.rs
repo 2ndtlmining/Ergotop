@@ -9,14 +9,21 @@ use super::{kv, origin_text, panel};
 use crate::app::{App, EXPLORER_TX_URL};
 use crate::format;
 
-const KEYS: [(&str, &str); 16] = [
+const KEYS: [(&str, &str); 19] = [
     ("1 2 3", "Dashboard / Packing / Sources"),
     ("↑ ↓ PgUp PgDn", "Move selection (detail: scroll)"),
     ("g G Home End", "Top / bottom"),
     ("Enter", "Transaction detail (Sources: txs only in source)"),
     ("s", "Cycle sort: rate → fee → value → size → age → origin"),
     ("S", "Reverse sort direction"),
-    ("/", "Filter: name, kind, tx id, >ERG, <ERG"),
+    (
+        "/",
+        "Filter: words, >100, fee>0.01, size<2k, rate>1k, age>5m",
+    ),
+    (
+        "",
+        "  origin:a,b  addr:9f..  token:sigusd  !not  · ↑↓ history",
+    ),
     ("Esc", "Clear filter / close"),
     ("c", "Copy tx id (Sources: source URL)"),
     ("e", "Open tx in explorer (Sources: source URL)"),
@@ -24,6 +31,11 @@ const KEYS: [(&str, &str); 16] = [
     ("t", "Cycle theme"),
     ("m", "Toggle motion"),
     ("r", "Refresh all sources now"),
+    (
+        "w",
+        "Watch the current filter (alerts on arrive/confirm/drop)",
+    ),
+    ("W", "Watch alerts"),
     ("?", "Help"),
     ("q", "Quit"),
 ];
@@ -39,17 +51,52 @@ fn centered(area: Rect, w_pct: u16, h_pct: u16) -> Rect {
     )
 }
 
-pub fn help(f: &mut Frame, area: Rect, app: &App) {
+/// Renders `lines` in a popup scrolled by `app.overlay_scroll`, clamped to the content
+/// so Up right after End moves at once; the title says when there is more.
+fn scrolled(f: &mut Frame, r: Rect, app: &mut App, title: &str, lines: Vec<Line<'static>>) {
+    let max_scroll = (lines.len() as u16).saturating_sub(r.height.saturating_sub(2));
+    let scroll = app.overlay_scroll.min(max_scroll);
+    let title = if max_scroll > 0 {
+        format!("{title}  ↑↓ scroll {scroll}/{max_scroll}")
+    } else {
+        title.to_string()
+    };
+    f.render_widget(Clear, r);
+    f.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll, 0))
+            .block(panel(title, &app.theme)),
+        r,
+    );
+    app.overlay_scroll = scroll;
+}
+
+/// `W`: watch alerts, newest first.
+pub fn watch_log(f: &mut Frame, area: Rect, app: &mut App) {
     let r = centered(area, 70, 70);
+    let title = match &app.watch {
+        Some(w) => format!("WATCH: {w}"),
+        None => "WATCH (off: set a filter with /, then w)".into(),
+    };
+    let mut lines: Vec<Line> = app
+        .watch_log
+        .iter()
+        .rev()
+        .map(|l| Line::from(l.clone()))
+        .collect();
+    if lines.is_empty() {
+        lines.push(Line::from("No alerts yet."));
+    }
+    scrolled(f, r, app, &title, lines);
+}
+
+pub fn help(f: &mut Frame, area: Rect, app: &mut App) {
+    let r = centered(area, 70, 80);
     let lines: Vec<Line> = KEYS
         .iter()
         .map(|(k, d)| Line::from(format!("{k:<14} {d}")))
         .collect();
-    f.render_widget(Clear, r);
-    f.render_widget(
-        Paragraph::new(lines).block(panel("KEYS".into(), &app.theme)),
-        r,
-    );
+    scrolled(f, r, app, "KEYS", lines);
 }
 
 pub fn detail(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
@@ -146,20 +193,5 @@ pub fn detail(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
         "c: copy id · e: open in explorer · Esc: close",
         Style::new().fg(t.dim),
     )));
-    // Clamp so Up right after End moves at once; the title says when there is more.
-    let max_scroll = (lines.len() as u16).saturating_sub(r.height.saturating_sub(2));
-    let scroll = app.detail_scroll.min(max_scroll);
-    let title = if max_scroll > 0 {
-        format!("TRANSACTION  ↑↓ scroll {}/{}", scroll, max_scroll)
-    } else {
-        "TRANSACTION".into()
-    };
-    f.render_widget(Clear, r);
-    f.render_widget(
-        Paragraph::new(lines)
-            .scroll((scroll, 0))
-            .block(panel(title, &t)),
-        r,
-    );
-    app.detail_scroll = scroll;
+    scrolled(f, r, app, "TRANSACTION", lines);
 }

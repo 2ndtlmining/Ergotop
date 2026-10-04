@@ -31,6 +31,24 @@ pub fn usd(v: f64) -> String {
     }
 }
 
+/// A one-line chart of `values`, scaled to their own min..max (flat series sit mid-height).
+pub fn spark(values: &[u64]) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let (Some(&lo), Some(&hi)) = (values.iter().min(), values.iter().max()) else {
+        return String::new();
+    };
+    values
+        .iter()
+        .map(|&v| {
+            if hi == lo {
+                BARS[3]
+            } else {
+                BARS[((v - lo) * 7 / (hi - lo)) as usize]
+            }
+        })
+        .collect()
+}
+
 pub fn bytes(n: u64) -> String {
     if n < 1024 {
         format!("{n} B")
@@ -101,6 +119,14 @@ mod tests {
         assert_eq!(usd(12.5), "$12.50");
         assert_eq!(usd(1_234.0), "$1.2k");
         assert_eq!(usd(3_400_000.0), "$3.4M");
+    }
+
+    #[test]
+    fn sparklines_scale_to_the_window() {
+        assert_eq!(spark(&[0, 1, 2, 3, 4, 5, 6, 7]), "▁▂▃▄▅▆▇█");
+        assert_eq!(spark(&[5, 5, 5]), "▄▄▄", "flat series sit mid-height");
+        assert_eq!(spark(&[10, 0]), "█▁");
+        assert_eq!(spark(&[]), "");
     }
 
     #[test]

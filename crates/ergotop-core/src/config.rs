@@ -2,7 +2,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::model::{SourceId, SourceKind};
 
@@ -48,6 +48,17 @@ pub struct UiConfig {
     pub motion: bool,
     /// Highlight txs moving at least this many ERG; 0 disables.
     pub whale_erg: f64,
+    /// rate | fee | value | size | age | origin
+    pub sort: String,
+    pub sort_reversed: bool,
+    /// rect | hexagon
+    pub shape: String,
+    /// Recent filters (normally kept in state.toml, not set by hand).
+    pub filter_history: Vec<String>,
+    /// Filter being watched (`w`); empty = none.
+    pub watch: String,
+    /// Ring the terminal bell on watch alerts.
+    pub watch_bell: bool,
 }
 
 impl Default for UiConfig {
@@ -58,6 +69,12 @@ impl Default for UiConfig {
             start_view: "packing".into(),
             motion: true,
             whale_erg: 10_000.0,
+            sort: "rate".into(),
+            sort_reversed: false,
+            shape: "rect".into(),
+            filter_history: Vec::new(),
+            watch: String::new(),
+            watch_bell: true,
         }
     }
 }
@@ -140,6 +157,76 @@ pub fn cache_dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("ergotop"))
 }
 
+pub const STATE_FILE: &str = "state.toml";
+
+/// UI choices made in the app, remembered across runs in `state.toml` next to
+/// `ergotop.toml` (which is never rewritten, so its comments survive).
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct UiState {
+    pub theme: Option<String>,
+    pub view: Option<String>,
+    pub sort: Option<String>,
+    pub sort_reversed: Option<bool>,
+    pub motion: Option<bool>,
+    pub shape: Option<String>,
+    pub filter_history: Option<Vec<String>>,
+    pub watch: Option<String>,
+}
+
+impl UiState {
+    /// Overrides the fields this state sets.
+    pub fn apply(&self, ui: &mut UiConfig) {
+        if let Some(v) = &self.theme {
+            ui.theme = v.clone();
+        }
+        if let Some(v) = &self.view {
+            ui.start_view = v.clone();
+        }
+        if let Some(v) = &self.sort {
+            ui.sort = v.clone();
+        }
+        if let Some(v) = self.sort_reversed {
+            ui.sort_reversed = v;
+        }
+        if let Some(v) = self.motion {
+            ui.motion = v;
+        }
+        if let Some(v) = &self.shape {
+            ui.shape = v.clone();
+        }
+        if let Some(v) = &self.filter_history {
+            ui.filter_history = v.clone();
+        }
+        if let Some(v) = &self.watch {
+            ui.watch = v.clone();
+        }
+    }
+}
+
+/// The remembered UI state; missing or unreadable files give an empty state.
+pub fn load_state(dir: &Path) -> UiState {
+    std::fs::read_to_string(dir.join(STATE_FILE))
+        .ok()
+        .and_then(|text| toml::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// Writes `state.toml` atomically (temp file + rename).
+pub fn save_state(dir: &Path, state: &UiState) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let text = toml::to_string(state).map_err(std::io::Error::other)?;
+    let tmp = dir.join(format!("{STATE_FILE}.tmp"));
+    std::fs::write(
+        &tmp,
+        format!(
+            "# Written by ergotop: UI choices made in the app.
+{text}"
+        ),
+    )?;
+    std::fs::rename(tmp, dir.join(STATE_FILE))
+}
+
 /// Loads `ergotop.toml` and `addresses.toml` from `dir`.
 /// Missing files give defaults; unparsable files give defaults plus a warning.
 pub fn load_from_dir(dir: &Path) -> (Config, AddressesFile, Vec<String>) {
@@ -168,6 +255,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn state_round_trips_and_overrides_only_what_it_sets() {
+        let dir = temp_dir("state");
+        assert_eq!(load_state(&dir), UiState::default(), "missing file");
+        let state = UiState {
+            theme: Some("amber-terminal".into()),
+            sort: Some("value".into()),
+            sort_reversed: Some(true),
+            motion: Some(false),
+            ..Default::default()
+        };
+        save_state(&dir, &state).unwrap();
+        assert_eq!(load_state(&dir), state);
+        let mut ui = UiConfig {
+            start_view: "sources".into(),
+            ..Default::default()
+        };
+        state.apply(&mut ui);
+        assert_eq!(ui.theme, "amber-terminal");
+        assert_eq!(
+            (ui.sort.as_str(), ui.sort_reversed, ui.motion),
+            ("value", true, false)
+        );
+        assert_eq!(
+            ui.start_view, "sources",
+            "unset fields keep the config value"
+        );
+        assert_eq!(ui.shape, "rect");
+    }
+
+    #[test]
+    fn broken_state_file_is_ignored() {
+        let dir = temp_dir("bad-state");
+        std::fs::write(dir.join(STATE_FILE), "theme = [").unwrap();
+        assert_eq!(load_state(&dir), UiState::default());
     }
 
     #[test]

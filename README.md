@@ -10,8 +10,10 @@ Written in Rust (ratatui + tokio). The previous Python/Textual version lives on 
 - **Accurate.** Real fees (the fee output, no guesses), value excluding change, exact mined transactions per block, real `maxBlockSize` from the node, mined vs dropped told apart.
 - **Packing visualizer.** Transactions are selected for the next block by fee per byte, packed bottom-up like the Ergomempool web app, and animated: new ones fall in, mined ones flash and rise out. `l` toggles the ERG hexagon.
 - **Fee rates.** Every transaction's fee per byte (the default sort), mempool median / p90, and the lowest rate still making the next block when it is full. USD values when the ERG price is known; whale transactions are highlighted.
+- **History.** Sparklines of mempool size, bytes and median fee rate (a sample every 10 s, the last hour kept) under the MEMPOOL panel.
 - **Sources view.** Status, latency and transaction count for every node and explorer, plus the transactions only one source has.
 - **Address book.** Classifies transactions with the [ergexplorer.com address book](https://ergexplorer.com/addressbook) (cached, with an offline snapshot built in), your own `addresses.toml`, and built-in contract rules.
+- **Any terminal size.** Three columns from 120 wide, visualizer + table + mempool/selected from 80, visualizer + table below that; table columns are dropped whole by priority instead of being cut.
 - **Fast.** A full dashboard frame with 10,000 transactions renders in about 1.1 ms (sorted rows are keyed once per sort, fee-rate stats only recomputed when data changes); the UI only redraws when something changes, plus once a second so ages tick.
 
 ## Install
@@ -46,7 +48,12 @@ ergotop                      # interactive TUI
 ergotop --headless           # text output, one line per event
 ergotop --config ./mycfg     # read ergotop.toml / addresses.toml from a directory
 ergotop --log ergotop.log    # write diagnostics to a file
+ergotop --node-url http://192.168.1.50:9053 --view dashboard --theme amber-terminal
+ergotop --sort value --reverse --hexagon --no-motion --fps 10 --whale 500
+ergotop --no-state           # ignore (and don't write) the remembered in-app choices
 ```
+
+`ergotop --help` lists every flag. Theme, view, sort and its direction, motion and hexagon mode chosen in the app are remembered in `state.toml` next to `ergotop.toml` (your `ergotop.toml` is never rewritten). Precedence: defaults < `ergotop.toml` < `state.toml` < environment < flags. Delete `state.toml` to go back to the file's settings.
 
 | Key | Action |
 |---|---|
@@ -56,7 +63,7 @@ ergotop --log ergotop.log    # write diagnostics to a file
 | `Enter` | Transaction detail with its explorer link (Sources view: transactions only in that source) |
 | `s` | Cycle sort: fee rate (nanoERG/byte, default) → fee → value → size → age → origin |
 | `S` | Reverse the sort direction (▼/▲ shown on the column) |
-| `/` | Filter: name, kind (`exchange`), tx id prefix, `>100`, `<1` (ERG) |
+| `/` | Filter (see below) |
 | `Esc` | Clear filter / close popup |
 | `c` | Copy tx id (OSC 52 — works over SSH in most terminals); Sources view: the source URL |
 | `e` | Open tx in the explorer; Sources view: open the source URL |
@@ -64,8 +71,34 @@ ergotop --log ergotop.log    # write diagnostics to a file
 | `t` | Cycle theme (neon-green, amber-terminal, blue-ice, high-contrast) |
 | `m` | Toggle motion (animations on/off) |
 | `r` | Refresh all sources now (also cuts a failure backoff short) |
+| `w` | Watch the current filter (see below); `w` again stops |
+| `W` | Watch alerts |
 | `?` | Help |
 | `q` | Quit |
+
+### Filter
+
+Press `/` and type space-separated terms; a transaction must match all of them. The table title shows the match count (`TRANSACTIONS 2/348`), and a term that can't be parsed is shown in red in the status bar and ignored.
+
+| Term | Matches |
+|---|---|
+| `kucoin`, `exchange`, `a1b2c3` | origin name, kind or "from" label (contains), or tx id prefix |
+| `>100`, `<1` | value in ERG |
+| `fee>0.01`, `value>=100`, `size<2k`, `rate>1000`, `age>5m` | field comparisons (`< <= > >= =`); size units `b k m`, rate `k`, age `s m h` |
+| `origin:rosen,spectrum` | any of these origins |
+| `addr:9fyeE` | an input or output address starting with this |
+| `token:sigusd`, `token:03faf2` | a box carrying a token with this name (contains) or id prefix |
+| `!term` | not `term`, e.g. `!p2p` |
+
+While typing a filter, `↑`/`↓` recall earlier ones (the last 20 are remembered in `state.toml`).
+
+Example: `spectrum >100 !age<30s` shows Spectrum transactions over 100 ERG that have been waiting at least 30 seconds.
+
+### Watch
+
+Set a filter, then press `w`: Ergotop alerts (status line for 10 s, terminal bell, and the `W` log) when a matching transaction enters the mempool, is confirmed in a block, or drops out. Typical use: `addr:<your address>` then `w`, and leave it running. The header shows `◉ watch: …`; the watched filter is remembered in `state.toml`, and a restart doesn't re-alert for matches already in the mempool. `watch_bell = false` under `[ui]` turns the bell off.
+
+### Status bar
 
 The status bar shows the active source and how fresh its data is: `● node-a · 1s ago` (your node), `○ explorer fallback: p2p · 3s ago`, `◐ node-a · stale 42s` (no update for over 10 s from a node or 30 s from an explorer; also shown in the TRANSACTIONS title), `✕ offline · data 1m 12s old` (no usable source, last data kept on screen), or `… connecting to sources`. Press `3` to see why a source is down.
 
@@ -94,7 +127,8 @@ Then run `ergotop`: the status bar shows `● node-a` when your node is the live
 Other ways to set the node:
 
 - `ergotop --config /path/to/folder` — read `ergotop.toml` / `addresses.toml` from that folder instead
-- `ERGO_NODE_URL=http://192.168.1.50:9053 ergotop` — a single node, no file needed
+- `ergotop --node-url http://192.168.1.50:9053` (repeat for several nodes) — no file needed
+- `ERGO_NODE_URL=http://192.168.1.50:9053 ergotop` — a single node via the environment
 
 Your own address labels go in `addresses.toml` next to it — see [`examples/addresses.toml`](examples/addresses.toml).
 
@@ -127,9 +161,13 @@ fps = 30
 start_view = "packing"               # dashboard | packing | sources
 motion = true                        # false: no animations
 whale_erg = 10000                    # highlight txs moving at least this many ERG; 0 = off
+sort = "rate"                        # rate | fee | value | size | age | origin
+sort_reversed = false
+shape = "rect"                       # rect | hexagon
+watch_bell = true                    # ring the terminal bell on watch alerts
 ```
 
-With no `[[node]]` entries Ergotop tries `http://127.0.0.1:9053`. Environment variables override the file: `ERGO_NODE_URL` (one node), `ERGO_API_URL` (one explorer).
+With no `[[node]]` entries Ergotop tries `http://127.0.0.1:9053`. Environment variables override the file: `ERGO_NODE_URL` (one node), `ERGO_API_URL` (one explorer); command-line flags override both.
 
 Nodes work best as full UTXO nodes with `extraIndex = true`: that enables token names, index-lag health and detail for already-mined transactions. Non-indexed nodes still work for the mempool.
 

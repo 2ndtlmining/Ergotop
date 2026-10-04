@@ -19,6 +19,11 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         (area, None)
     };
     let views = app.rec.views();
+    // Source, Kind, Status, Latency, Txs, Only here, Height, Index lag, Version.
+    // Status takes the spare width; the rest are shown whole by priority.
+    const WIDTHS: [u16; 9] = [16, 9, 12, 8, 6, 10, 11, 10, 9];
+    const PRIORITY: [usize; 9] = [0, 2, 4, 3, 6, 5, 1, 7, 8];
+    let keep = super::fit_columns(&WIDTHS, &PRIORITY, table_area.width.saturating_sub(2));
     let rows: Vec<Row> = views
         .iter()
         .map(|v| {
@@ -30,68 +35,77 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
                 SourceStatus::Unknown => ("waiting".to_string(), t.dim),
             };
             let info = v.info.as_ref();
-            Row::new(vec![
-                Cell::from(format!(
-                    "{}{}",
-                    if active { "* " } else { "  " },
-                    format::trunc(&v.id.0, 14)
-                )),
-                Cell::from(match v.kind {
-                    SourceKind::Node => "node",
-                    SourceKind::Explorer => "explorer",
-                }),
-                Cell::from(Span::styled(
-                    format::trunc(&status, 80),
-                    Style::new().fg(color),
-                )),
-                Cell::from(
-                    v.latency_ms
-                        .map(|l| format!("{l}ms"))
+            Row::new(super::kept(
+                vec![
+                    Cell::from(format!(
+                        "{}{}",
+                        if active { "* " } else { "  " },
+                        format::trunc(&v.id.0, 14)
+                    )),
+                    Cell::from(match v.kind {
+                        SourceKind::Node => "node",
+                        SourceKind::Explorer => "explorer",
+                    }),
+                    Cell::from(Span::styled(
+                        format::trunc(&status, 80),
+                        Style::new().fg(color),
+                    )),
+                    Cell::from(
+                        v.latency_ms
+                            .map(|l| format!("{l}ms"))
+                            .unwrap_or_else(|| "-".into()),
+                    ),
+                    Cell::from(v.ids.len().to_string()),
+                    Cell::from(app.rec.only_in(&v.id).len().to_string()),
+                    Cell::from(
+                        info.map(|i| format::thousands(i.full_height as u64))
+                            .unwrap_or_else(|| "-".into()),
+                    ),
+                    Cell::from(
+                        info.and_then(|i| {
+                            i.indexed_height
+                                .map(|h| i.full_height.saturating_sub(h).to_string())
+                        })
                         .unwrap_or_else(|| "-".into()),
-                ),
-                Cell::from(v.ids.len().to_string()),
-                Cell::from(app.rec.only_in(&v.id).len().to_string()),
-                Cell::from(
-                    info.map(|i| format::thousands(i.full_height as u64))
-                        .unwrap_or_else(|| "-".into()),
-                ),
-                Cell::from(
-                    info.and_then(|i| {
-                        i.indexed_height
-                            .map(|h| i.full_height.saturating_sub(h).to_string())
-                    })
-                    .unwrap_or_else(|| "-".into()),
-                ),
-                Cell::from(
-                    info.map(|i| i.app_version.clone())
-                        .unwrap_or_else(|| "-".into()),
-                ),
-            ])
+                    ),
+                    Cell::from(
+                        info.map(|i| i.app_version.clone())
+                            .unwrap_or_else(|| "-".into()),
+                    ),
+                ],
+                &keep,
+            ))
         })
         .collect();
-    let header = Row::new(vec![
-        "Source",
-        "Kind",
-        "Status",
-        "Latency",
-        "Txs",
-        "Only here",
-        "Height",
-        "Index lag",
-        "Version",
-    ])
+    let header = Row::new(super::kept(
+        vec![
+            "Source",
+            "Kind",
+            "Status",
+            "Latency",
+            "Txs",
+            "Only here",
+            "Height",
+            "Index lag",
+            "Version",
+        ],
+        &keep,
+    ))
     .style(Style::new().fg(t.accent).add_modifier(Modifier::BOLD));
-    let widths = [
-        Constraint::Length(16),
-        Constraint::Length(9),
-        Constraint::Min(30),
-        Constraint::Length(8),
-        Constraint::Length(6),
-        Constraint::Length(10),
-        Constraint::Length(11),
-        Constraint::Length(10),
-        Constraint::Length(9),
-    ];
+    let widths: Vec<Constraint> = super::kept(
+        WIDTHS
+            .iter()
+            .enumerate()
+            .map(|(i, &w)| {
+                if i == 2 {
+                    Constraint::Min(w)
+                } else {
+                    Constraint::Length(w)
+                }
+            })
+            .collect(),
+        &keep,
+    );
     let table = Table::new(rows, widths)
         .header(header)
         .block(panel(

@@ -1,19 +1,18 @@
 //! Pure application state: folds source events and key presses; no terminal I/O.
 use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ergotop_core::classify::{BookEntry, Builtin, Classifier};
-use ergotop_core::config::{AddressesFile, LocalAddress, SourceSpec, UiConfig};
+use ergotop_core::config::{AddressesFile, LocalAddress, SourceSpec, UiConfig, UiState};
 use ergotop_core::metrics::{rate_stats, RateStats, FEE_ADDRESS};
-use ergotop_core::model::{
-    nano_to_erg, Block, NodeInfo, SourceId, SourceKind, Token, TokenMeta, TxId,
-};
+use ergotop_core::model::{Block, NodeInfo, SourceId, SourceKind, Token, TokenMeta, TxId};
 use ergotop_core::packing::Shape;
 use ergotop_core::reconcile::{Reconciler, TxEntry, Update};
 use ergotop_core::sources::SourceEvent;
 
+use crate::filter::Filter;
 use crate::format;
 use crate::theme::{rgb, Theme};
 use crate::viz::{Visualizer, VizItem};
@@ -21,8 +20,25 @@ use crate::viz::{Visualizer, VizItem};
 /// Ergo `maxBlockSize` (explorer /api/v1/epochs/params, 2026-10-03); used until a node reports it.
 pub const DEFAULT_MAX_BLOCK_SIZE: u32 = 1_271_009;
 const STATUS_MS: u64 = 3_000;
+/// Watch alerts stay up longer than ordinary status messages.
+const WATCH_STATUS_MS: u64 = 10_000;
+const WATCH_LOG: usize = 50;
+/// Mempool history: one sample every 10 s, one hour kept.
+pub const HISTORY_EVERY_MS: u64 = 10_000;
+const HISTORY_LEN: usize = 360;
+
+/// One point of the mempool history charts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sample {
+    pub at_ms: u64,
+    pub txs: u64,
+    pub bytes: u64,
+    /// Median fee rate, nanoERG per byte.
+    pub median_rate: u64,
+}
 const BLOCK_FLASH_MS: u64 = 1_500;
 const PAGE: usize = 10;
+const FILTER_HISTORY: usize = 20;
 pub const EXPLORER_TX_URL: &str = "https://explorer.ergoplatform.com/en/transactions/";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +54,14 @@ impl View {
             "dashboard" => View::Dashboard,
             "sources" => View::Sources,
             _ => View::Packing,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            View::Dashboard => "dashboard",
+            View::Packing => "packing",
+            View::Sources => "sources",
         }
     }
 }
@@ -64,6 +88,23 @@ impl SortKey {
         }
     }
 
+    pub const ALL: [SortKey; 6] = [
+        SortKey::Rate,
+        SortKey::Fee,
+        SortKey::Value,
+        SortKey::Size,
+        SortKey::Age,
+        SortKey::Origin,
+    ];
+
+    /// The key with this label; unknown labels fall back to fee rate.
+    pub fn parse(s: &str) -> SortKey {
+        SortKey::ALL
+            .into_iter()
+            .find(|k| k.label() == s)
+            .unwrap_or(SortKey::Rate)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             SortKey::Rate => "rate",
@@ -81,6 +122,7 @@ pub enum Overlay {
     None,
     Help,
     Detail,
+    WatchLog,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,11 +163,24 @@ pub struct App {
     pub overlay: Overlay,
     pub filter: String,
     pub filtering: bool,
+    /// Applied filters, oldest first; Up/Down recall them while typing a filter.
+    pub filter_history: Vec<String>,
+    /// The filter being watched (`w`): matching txs entering, confirming or dropping alert.
+    pub watch: Option<String>,
+    /// Watched txs seen in the pool, so confirmations and drops can be reported.
+    watched: HashSet<TxId>,
+    /// Recent watch alerts, oldest first.
+    pub watch_log: Vec<String>,
+    /// Mempool history for the sparklines, oldest first.
+    pub history: VecDeque<Sample>,
+    watch_bell: bool,
+    bell: bool,
+    history_pos: Option<usize>,
     pub sort: SortKey,
     /// Sort opposite to the key's natural direction (`S`).
     pub sort_reversed: bool,
-    /// First visible line of the detail popup; clamped to its content when drawn.
-    pub detail_scroll: u16,
+    /// First visible line of the open popup; clamped to its content when drawn.
+    pub overlay_scroll: u16,
     pub selected: usize,
     /// The selected tx; `selected` is re-derived from it whenever rows change.
     selected_id: Option<TxId>,
@@ -161,33 +216,6 @@ fn sort_keyed<'a, K: Ord>(v: &mut Vec<&'a TxEntry>, key: impl Fn(&'a TxEntry) ->
     v.extend(keyed.into_iter().map(|(_, e)| e));
 }
 
-fn matches_filter(e: &TxEntry, filter: &str) -> bool {
-    let f = filter.trim();
-    if f.is_empty() {
-        return true;
-    }
-    if let Some(n) = f
-        .strip_prefix('>')
-        .and_then(|s| s.trim().parse::<f64>().ok())
-    {
-        return nano_to_erg(e.metrics.value) >= n;
-    }
-    if let Some(n) = f
-        .strip_prefix('<')
-        .and_then(|s| s.trim().parse::<f64>().ok())
-    {
-        return nano_to_erg(e.metrics.value) <= n;
-    }
-    let f = f.to_lowercase();
-    e.class.class.name.to_lowercase().contains(&f)
-        || e.class.class.kind.label().to_lowercase().contains(&f)
-        || e.class
-            .from
-            .as_deref()
-            .is_some_and(|x| x.to_lowercase().contains(&f))
-        || e.tx.id.starts_with(&f)
-}
-
 impl App {
     pub fn new(specs: &[SourceSpec], addrs: AddressesFile, ui: &UiConfig) -> App {
         let builtin = Builtin::load();
@@ -205,9 +233,17 @@ impl App {
             overlay: Overlay::None,
             filter: String::new(),
             filtering: false,
-            sort: SortKey::Rate,
-            sort_reversed: false,
-            detail_scroll: 0,
+            filter_history: ui.filter_history.clone(),
+            watch: Some(ui.watch.trim().to_string()).filter(|w| !w.is_empty()),
+            watched: HashSet::new(),
+            watch_log: Vec::new(),
+            history: VecDeque::new(),
+            watch_bell: ui.watch_bell,
+            bell: false,
+            history_pos: None,
+            sort: SortKey::parse(&ui.sort),
+            sort_reversed: ui.sort_reversed,
+            overlay_scroll: 0,
             selected: 0,
             selected_id: None,
             source_sel: 0,
@@ -229,7 +265,30 @@ impl App {
             stats_cache: RefCell::new(None),
         };
         app.viz.set_motion(ui.motion);
+        if ui.shape == "hexagon" {
+            app.viz.shape = Shape::Hexagon;
+        }
         app
+    }
+
+    /// The UI choices worth remembering across runs.
+    pub fn ui_state(&self) -> UiState {
+        UiState {
+            theme: Some(self.theme.name.to_string()),
+            view: Some(self.view.name().to_string()),
+            sort: Some(self.sort.label().to_string()),
+            sort_reversed: Some(self.sort_reversed),
+            motion: Some(self.viz.motion),
+            filter_history: Some(self.filter_history.clone()),
+            watch: Some(self.watch.clone().unwrap_or_default()),
+            shape: Some(
+                match self.viz.shape {
+                    Shape::Rect => "rect",
+                    Shape::Hexagon => "hexagon",
+                }
+                .to_string(),
+            ),
+        }
     }
 
     pub fn on_source_event(&mut self, ev: SourceEvent, now_ms: u64) {
@@ -264,6 +323,7 @@ impl App {
     }
 
     fn on_updates(&mut self, updates: &[Update], now_ms: u64) {
+        self.watch_updates(updates, now_ms);
         let mut changed = false;
         let mut animate = true;
         for u in updates {
@@ -377,11 +437,12 @@ impl App {
     }
 
     pub fn rows(&self) -> Vec<&TxEntry> {
+        let filter = Filter::parse(&self.filter);
         let mut v: Vec<&TxEntry> = self
             .rec
             .pool()
             .values()
-            .filter(|e| matches_filter(e, &self.filter))
+            .filter(|e| filter.matches(e, self.clock_ms, &self.tokens))
             .collect();
         match self.sort {
             SortKey::Rate => sort_keyed(&mut v, |e| {
@@ -397,6 +458,11 @@ impl App {
             v.reverse();
         }
         v
+    }
+
+    /// Terms of the current filter that could not be parsed (they are ignored).
+    pub fn filter_errors(&self) -> Vec<String> {
+        Filter::parse(&self.filter).errors
     }
 
     /// ▼ for largest/oldest first, ▲ for smallest/newest first (origin: ▲ is A→Z).
@@ -620,12 +686,140 @@ impl App {
         self.status = Some((msg, now_ms + STATUS_MS));
     }
 
+    /// Records a history sample every `HISTORY_EVERY_MS` once a pool has arrived.
+    fn sample_history(&mut self, now_ms: u64) {
+        if self.last_pool_ms.is_none() {
+            return;
+        }
+        if let Some(last) = self.history.back() {
+            if now_ms < last.at_ms + HISTORY_EVERY_MS {
+                return;
+            }
+        }
+        let pool = self.rec.pool();
+        let sample = Sample {
+            at_ms: now_ms,
+            txs: pool.len() as u64,
+            bytes: pool.values().map(|e| u64::from(e.tx.size)).sum(),
+            median_rate: self.rate_stats().map_or(0, |r| r.median),
+        };
+        self.history.push_back(sample);
+        if self.history.len() > HISTORY_LEN {
+            self.history.pop_front();
+        }
+    }
+
+    /// True once after a watch alert (the terminal rings the bell).
+    pub fn take_bell(&mut self) -> bool {
+        std::mem::take(&mut self.bell)
+    }
+
+    /// `w`: watch the current filter, or stop watching.
+    fn toggle_watch(&mut self, now_ms: u64) {
+        let f = self.filter.trim().to_string();
+        if self.watch.is_some() && (f.is_empty() || self.watch.as_deref() == Some(f.as_str())) {
+            self.watch = None;
+            self.watched.clear();
+            self.set_status("Stopped watching".into(), now_ms);
+            return;
+        }
+        if f.is_empty() {
+            self.set_status(
+                "Type a filter with / first, then w to watch it".into(),
+                now_ms,
+            );
+            return;
+        }
+        self.watched = self.watch_matches(&f);
+        let msg = format!(
+            "Watching \"{f}\": {} in the mempool now; alerts when matches arrive, confirm or drop",
+            self.watched.len()
+        );
+        self.watch = Some(f);
+        self.set_status(msg, now_ms);
+    }
+
+    fn watch_matches(&self, filter: &str) -> HashSet<TxId> {
+        let f = Filter::parse(filter);
+        self.rec
+            .pool()
+            .values()
+            .filter(|e| f.matches(e, self.clock_ms, &self.tokens))
+            .map(|e| e.tx.id.clone())
+            .collect()
+    }
+
+    fn watch_updates(&mut self, updates: &[Update], now_ms: u64) {
+        let Some(watch) = self.watch.clone() else {
+            return;
+        };
+        let f = Filter::parse(&watch);
+        let mut alerts = Vec::new();
+        for u in updates {
+            match u {
+                Update::Added(ids) => {
+                    for id in ids {
+                        let Some(e) = self.rec.pool().get(id) else {
+                            continue;
+                        };
+                        if f.matches(e, now_ms, &self.tokens) && self.watched.insert(id.clone()) {
+                            alerts.push(format!(
+                                "◉ {} entered: {}, {} ERG",
+                                format::short_id(id),
+                                e.class.class.name,
+                                format::erg(e.metrics.value)
+                            ));
+                        }
+                    }
+                }
+                Update::Mined { height, tx_ids } => {
+                    for id in tx_ids {
+                        if self.watched.remove(id) {
+                            alerts.push(format!(
+                                "✓ {} confirmed in #{}",
+                                format::short_id(id),
+                                format::thousands(u64::from(*height))
+                            ));
+                        }
+                    }
+                }
+                Update::Dropped(ids) => {
+                    for id in ids {
+                        if self.watched.remove(id) {
+                            alerts.push(format!("✕ {} dropped", format::short_id(id)));
+                        }
+                    }
+                }
+                // A rebuilt pool is not news: pick up matches without alerting.
+                Update::Resynced => {
+                    let now = self.watch_matches(&watch);
+                    self.watched.extend(now);
+                }
+                Update::BlockAdded(_) | Update::SourcesChanged => {}
+            }
+        }
+        if alerts.is_empty() {
+            return;
+        }
+        let msg = if alerts.len() == 1 {
+            format!("watch: {}", alerts[0])
+        } else {
+            format!("watch: {} (+{} more)", alerts[0], alerts.len() - 1)
+        };
+        self.status = Some((msg, now_ms + WATCH_STATUS_MS));
+        self.watch_log.extend(alerts);
+        let excess = self.watch_log.len().saturating_sub(WATCH_LOG);
+        self.watch_log.drain(..excess);
+        self.bell = self.watch_bell;
+    }
+
     pub fn tick(&mut self, now_ms: u64) -> bool {
         self.clock_ms = self.clock_ms.max(now_ms);
         // Ages and the freshness line change every second even without events.
         let sec = now_ms / 1000;
         let new_second = sec != self.last_tick_sec;
         self.last_tick_sec = sec;
+        self.sample_history(now_ms);
         let expired = self.viz.expire_pending(now_ms);
         if !expired.is_empty() {
             for id in &expired {
@@ -659,11 +853,20 @@ impl App {
                     self.filter.clear();
                     self.filtering = false;
                 }
-                KeyCode::Enter => self.filtering = false,
+                KeyCode::Enter => {
+                    self.filtering = false;
+                    self.remember_filter();
+                }
+                KeyCode::Up => self.recall_filter(-1),
+                KeyCode::Down => self.recall_filter(1),
                 KeyCode::Backspace => {
                     self.filter.pop();
+                    self.history_pos = None;
                 }
-                KeyCode::Char(c) => self.filter.push(c),
+                KeyCode::Char(c) => {
+                    self.filter.push(c);
+                    self.history_pos = None;
+                }
                 _ => {}
             }
             self.clamp_selection();
@@ -676,28 +879,28 @@ impl App {
                     return Action::None;
                 }
                 KeyCode::Char('c') | KeyCode::Char('e') if self.overlay == Overlay::Detail => {}
-                KeyCode::Up | KeyCode::Char('k') if self.overlay == Overlay::Detail => {
-                    self.scroll_detail(-1);
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.scroll_overlay(-1);
                     return Action::None;
                 }
-                KeyCode::Down | KeyCode::Char('j') if self.overlay == Overlay::Detail => {
-                    self.scroll_detail(1);
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.scroll_overlay(1);
                     return Action::None;
                 }
-                KeyCode::PageUp if self.overlay == Overlay::Detail => {
-                    self.scroll_detail(-(PAGE as i64));
+                KeyCode::PageUp => {
+                    self.scroll_overlay(-(PAGE as i64));
                     return Action::None;
                 }
-                KeyCode::PageDown if self.overlay == Overlay::Detail => {
-                    self.scroll_detail(PAGE as i64);
+                KeyCode::PageDown => {
+                    self.scroll_overlay(PAGE as i64);
                     return Action::None;
                 }
-                KeyCode::Home | KeyCode::Char('g') if self.overlay == Overlay::Detail => {
-                    self.detail_scroll = 0;
+                KeyCode::Home | KeyCode::Char('g') => {
+                    self.overlay_scroll = 0;
                     return Action::None;
                 }
-                KeyCode::End | KeyCode::Char('G') if self.overlay == Overlay::Detail => {
-                    self.detail_scroll = u16::MAX;
+                KeyCode::End | KeyCode::Char('G') => {
+                    self.overlay_scroll = u16::MAX;
                     return Action::None;
                 }
                 _ => return Action::None,
@@ -719,7 +922,7 @@ impl App {
                     self.show_only = !self.show_only;
                 } else if self.selected_entry().is_some() {
                     self.overlay = Overlay::Detail;
-                    self.detail_scroll = 0;
+                    self.overlay_scroll = 0;
                 }
                 Action::None
             }
@@ -734,6 +937,7 @@ impl App {
             }
             KeyCode::Char('/') => {
                 self.filtering = true;
+                self.history_pos = None;
                 Action::None
             }
             KeyCode::Esc => {
@@ -785,12 +989,22 @@ impl App {
                 self.set_status(format!("Motion {}", if on { "on" } else { "off" }), now_ms);
                 Action::None
             }
+            KeyCode::Char('w') => {
+                self.toggle_watch(now_ms);
+                Action::None
+            }
+            KeyCode::Char('W') => {
+                self.overlay = Overlay::WatchLog;
+                self.overlay_scroll = 0;
+                Action::None
+            }
             KeyCode::Char('r') => {
                 self.set_status("Refreshing sources…".into(), now_ms);
                 Action::Refresh
             }
             KeyCode::Char('?') => {
                 self.overlay = Overlay::Help;
+                self.overlay_scroll = 0;
                 Action::None
             }
             _ => Action::None,
@@ -799,9 +1013,41 @@ impl App {
         action
     }
 
-    fn scroll_detail(&mut self, delta: i64) {
-        let cur = i64::from(self.detail_scroll.min(u16::MAX - 1));
-        self.detail_scroll = (cur + delta).clamp(0, i64::from(u16::MAX - 1)) as u16;
+    /// Saves the applied filter as the newest history entry (deduped, at most 20).
+    fn remember_filter(&mut self) {
+        let f = self.filter.trim().to_string();
+        self.history_pos = None;
+        if f.is_empty() {
+            return;
+        }
+        self.filter_history.retain(|h| *h != f);
+        self.filter_history.push(f);
+        let excess = self.filter_history.len().saturating_sub(FILTER_HISTORY);
+        self.filter_history.drain(..excess);
+    }
+
+    /// Steps through the history: -1 = older, +1 = newer; past the newest clears.
+    fn recall_filter(&mut self, step: i64) {
+        let n = self.filter_history.len();
+        if n == 0 {
+            return;
+        }
+        let pos = match (self.history_pos, step < 0) {
+            (None, true) => Some(n - 1),
+            (None, false) => None,
+            (Some(p), true) => Some(p.saturating_sub(1)),
+            (Some(p), false) if p + 1 < n => Some(p + 1),
+            (Some(_), false) => None,
+        };
+        self.history_pos = pos;
+        self.filter = pos
+            .map(|p| self.filter_history[p].clone())
+            .unwrap_or_default();
+    }
+
+    fn scroll_overlay(&mut self, delta: i64) {
+        let cur = i64::from(self.overlay_scroll.min(u16::MAX - 1));
+        self.overlay_scroll = (cur + delta).clamp(0, i64::from(u16::MAX - 1)) as u16;
     }
 
     fn set_view(&mut self, view: View) -> Action {
@@ -1054,15 +1300,19 @@ mod tests {
         app.on_key(key(KeyCode::Enter), NOW);
         app.on_key(key(KeyCode::Down), NOW);
         app.on_key(key(KeyCode::PageDown), NOW);
-        assert_eq!(app.detail_scroll, 1 + PAGE as u16);
+        assert_eq!(app.overlay_scroll, 1 + PAGE as u16);
         assert_eq!(app.selected, 0);
         app.on_key(key(KeyCode::Home), NOW);
-        assert_eq!(app.detail_scroll, 0);
+        assert_eq!(app.overlay_scroll, 0);
         app.on_key(key(KeyCode::End), NOW);
-        assert_eq!(app.detail_scroll, u16::MAX, "clamped to content when drawn");
+        assert_eq!(
+            app.overlay_scroll,
+            u16::MAX,
+            "clamped to content when drawn"
+        );
         app.on_key(key(KeyCode::Esc), NOW);
         app.on_key(key(KeyCode::Enter), NOW);
-        assert_eq!(app.detail_scroll, 0, "reopening starts at the top");
+        assert_eq!(app.overlay_scroll, 0, "reopening starts at the top");
     }
 
     #[test]
@@ -1335,6 +1585,100 @@ mod tests {
     }
 
     #[test]
+    fn starts_from_configured_ui_and_reports_changes_to_remember() {
+        let ui = UiConfig {
+            theme: "blue-ice".into(),
+            start_view: "dashboard".into(),
+            sort: "value".into(),
+            sort_reversed: true,
+            shape: "hexagon".into(),
+            motion: false,
+            ..Default::default()
+        };
+        let mut app = App::new(&specs(), Default::default(), &ui);
+        assert_eq!((app.sort, app.sort_reversed), (SortKey::Value, true));
+        assert_eq!(app.viz.shape, Shape::Hexagon);
+        let state = app.ui_state();
+        let mut round = UiConfig::default();
+        state.apply(&mut round);
+        assert_eq!(
+            round,
+            UiConfig {
+                fps: round.fps,
+                whale_erg: round.whale_erg,
+                ..ui
+            }
+        );
+        app.on_key(key(KeyCode::Char('s')), NOW);
+        assert_eq!(app.ui_state().sort.as_deref(), Some("size"));
+        assert_eq!(app.ui_state().sort_reversed, Some(false));
+    }
+
+    #[test]
+    fn help_popup_scrolls_and_reopens_at_top() {
+        let mut app = sample_app();
+        app.on_key(key(KeyCode::Char('?')), NOW);
+        app.on_key(key(KeyCode::Down), NOW);
+        app.on_key(key(KeyCode::Down), NOW);
+        assert_eq!(app.overlay_scroll, 2);
+        assert_eq!(app.selected, 0, "the list behind does not move");
+        app.on_key(key(KeyCode::Esc), NOW);
+        app.on_key(key(KeyCode::Char('?')), NOW);
+        assert_eq!(app.overlay_scroll, 0);
+    }
+
+    #[test]
+    fn filter_history_recalls_previous_filters_and_is_remembered() {
+        let mut app = sample_app();
+        let type_filter = |app: &mut App, text: &str| {
+            app.on_key(key(KeyCode::Esc), NOW);
+            app.on_key(key(KeyCode::Char('/')), NOW);
+            for c in text.chars() {
+                app.on_key(key(KeyCode::Char(c)), NOW);
+            }
+            app.on_key(key(KeyCode::Enter), NOW);
+        };
+        type_filter(&mut app, "kucoin");
+        type_filter(&mut app, ">10");
+        type_filter(&mut app, "kucoin");
+        assert_eq!(
+            app.filter_history,
+            vec![">10", "kucoin"],
+            "deduped, newest last"
+        );
+        app.on_key(key(KeyCode::Esc), NOW);
+        app.on_key(key(KeyCode::Char('/')), NOW);
+        app.on_key(key(KeyCode::Up), NOW);
+        assert_eq!(app.filter, "kucoin");
+        app.on_key(key(KeyCode::Up), NOW);
+        assert_eq!(app.filter, ">10");
+        app.on_key(key(KeyCode::Up), NOW);
+        assert_eq!(app.filter, ">10", "stops at the oldest");
+        app.on_key(key(KeyCode::Down), NOW);
+        assert_eq!(app.filter, "kucoin");
+        app.on_key(key(KeyCode::Down), NOW);
+        assert_eq!(app.filter, "", "past the newest is an empty line");
+        assert_eq!(
+            app.ui_state().filter_history,
+            Some(vec![">10".to_string(), "kucoin".to_string()])
+        );
+    }
+
+    #[test]
+    fn history_samples_every_ten_seconds_once_data_arrives() {
+        let mut app = App::new(&specs(), Default::default(), &Default::default());
+        app.tick(NOW);
+        assert!(app.history.is_empty(), "no data yet, nothing to chart");
+        let mut app = sample_app();
+        app.tick(NOW);
+        app.tick(NOW + 5_000);
+        app.tick(NOW + 10_000);
+        let h: Vec<_> = app.history.iter().map(|s| (s.txs, s.median_rate)).collect();
+        assert_eq!(h, vec![(4, 930), (4, 930)]);
+        assert_eq!(app.history[0].bytes, 412 + 2150 + 300 + 20_000);
+    }
+
+    #[test]
     fn r_asks_sources_to_refresh() {
         let mut app = sample_app();
         assert_eq!(app.on_key(key(KeyCode::Char('r')), NOW), Action::Refresh);
@@ -1394,6 +1738,130 @@ mod tests {
             new_txs,
             latency_ms: 20,
         }
+    }
+
+    #[test]
+    fn w_needs_a_filter_then_toggles_watching_it() {
+        let mut app = sample_app();
+        app.on_key(key(KeyCode::Char('w')), NOW);
+        assert_eq!(app.watch, None);
+        assert!(app.status.as_ref().unwrap().0.contains("filter"));
+        app.filter = "kucoin".into();
+        app.on_key(key(KeyCode::Char('w')), NOW);
+        assert_eq!(app.watch.as_deref(), Some("kucoin"));
+        assert!(app
+            .status
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("1 in the mempool now"));
+        assert_eq!(app.ui_state().watch.as_deref(), Some("kucoin"));
+        app.on_key(key(KeyCode::Char('w')), NOW);
+        assert_eq!(app.watch, None);
+        assert_eq!(app.ui_state().watch.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn watch_alerts_when_a_match_enters_and_confirms() {
+        let mut app = sample_app();
+        app.filter = "kucoin".into();
+        app.on_key(key(KeyCode::Char('w')), NOW);
+        app.filter.clear();
+        assert!(!app.take_bell(), "starting a watch is not an alert");
+        let e5 = tx("e5", 300, KUCOIN, vec![bx(WALLET, 7_000_000_000)]);
+        let all = vec![tid("a1"), tid("b2"), tid("c3"), tid("d4"), tid("e5")];
+        app.on_source_event(node_mempool(all, vec![e5]), NOW + 1_000);
+        assert!(app.status.as_ref().unwrap().0.contains("e5000000 entered"));
+        assert!(app.take_bell());
+        assert!(!app.take_bell(), "taken once");
+        // A non-matching tx arriving says nothing.
+        let f6 = tx("f6", 300, WALLET, vec![bx(CONTRACT, 1)]);
+        let all = vec![
+            tid("a1"),
+            tid("b2"),
+            tid("c3"),
+            tid("d4"),
+            tid("e5"),
+            tid("f6"),
+        ];
+        app.on_source_event(node_mempool(all, vec![f6]), NOW + 2_000);
+        assert!(!app.take_bell());
+        app.on_source_event(
+            SourceEvent::Block {
+                source: SourceId("node-a".into()),
+                block: Block {
+                    id: "hdr-2".into(),
+                    height: 1_886_102,
+                    timestamp_ms: NOW + 3_000,
+                    size: 1000,
+                    tx_ids: vec![tid("a1")],
+                    miner_address: None,
+                    miner_reward: 0,
+                },
+            },
+            NOW + 3_000,
+        );
+        let rest = vec![tid("b2"), tid("c3"), tid("d4"), tid("e5"), tid("f6")];
+        app.on_source_event(node_mempool(rest, vec![]), NOW + 4_000);
+        let log = app.watch_log.join(
+            "
+",
+        );
+        assert!(log.contains("a1000000 confirmed in #1,886,102"), "{log}");
+        assert!(app.take_bell());
+    }
+
+    #[test]
+    fn shift_w_opens_the_watch_log() {
+        let mut app = sample_app();
+        app.on_key(key(KeyCode::Char('W')), NOW);
+        assert_eq!(app.overlay, Overlay::WatchLog);
+        app.on_key(key(KeyCode::Esc), NOW);
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn a_remembered_watch_is_quiet_at_startup_but_reports_confirmations() {
+        let ui = UiConfig {
+            watch: "kucoin".into(),
+            ..Default::default()
+        };
+        let mut app = App::new(&specs(), Default::default(), &ui);
+        app.on_source_event(
+            SourceEvent::AddressBook(vec![ergotop_core::classify::BookEntry {
+                address: KUCOIN.into(),
+                name: "Kucoin".into(),
+                kind: ergotop_core::classify::Kind::Exchange,
+            }]),
+            NOW,
+        );
+        let a1 = tx("a1", 412, KUCOIN, vec![bx(WALLET, 12_000_000_000)]);
+        app.on_source_event(node_mempool(vec![tid("a1")], vec![a1]), NOW);
+        assert!(!app.take_bell(), "the first pool is not news");
+        assert!(app.watch_log.is_empty());
+        app.on_source_event(
+            SourceEvent::Block {
+                source: SourceId("node-a".into()),
+                block: Block {
+                    id: "hdr-9".into(),
+                    height: 1_886_200,
+                    timestamp_ms: NOW + 1_000,
+                    size: 500,
+                    tx_ids: vec![tid("a1")],
+                    miner_address: None,
+                    miner_reward: 0,
+                },
+            },
+            NOW + 1_000,
+        );
+        app.on_source_event(node_mempool(vec![], vec![]), NOW + 2_000);
+        assert!(
+            app.watch_log
+                .iter()
+                .any(|l| l.contains("a1000000 confirmed")),
+            "{:?}",
+            app.watch_log
+        );
     }
 
     #[test]
