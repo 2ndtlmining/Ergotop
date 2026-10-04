@@ -9,7 +9,7 @@ use super::{kv, origin_text, panel};
 use crate::app::{App, EXPLORER_TX_URL};
 use crate::format;
 
-const KEYS: [(&str, &str); 15] = [
+const KEYS: [(&str, &str); 16] = [
     ("1 2 3", "Dashboard / Packing / Sources"),
     ("↑ ↓ PgUp PgDn", "Move selection (detail: scroll)"),
     ("g G Home End", "Top / bottom"),
@@ -23,6 +23,7 @@ const KEYS: [(&str, &str); 15] = [
     ("l", "Toggle hexagon packing"),
     ("t", "Cycle theme"),
     ("m", "Toggle motion"),
+    ("r", "Refresh all sources now"),
     ("?", "Help"),
     ("q", "Quit"),
 ];

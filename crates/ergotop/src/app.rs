@@ -87,6 +87,22 @@ pub enum Action {
     Quit,
     Copy(String),
     Open(String),
+    /// Ask every source to poll now.
+    Refresh,
+}
+
+/// Data older than this (ms) from the active source counts as stale.
+const STALE_NODE_MS: u64 = 10_000;
+const STALE_EXPLORER_MS: u64 = 30_000;
+
+/// How current the shown mempool is; ages are in ms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Freshness {
+    Connecting,
+    Live(u64),
+    Stale(u64),
+    /// No usable source; the age of the last pool we got, if any.
+    Offline(Option<u64>),
 }
 
 pub struct App {
@@ -124,6 +140,10 @@ pub struct App {
     pub banner: Option<String>,
     /// Latest time seen from events, keys or ticks (ms); stamps visualizer relayouts.
     clock_ms: u64,
+    /// When the active source last delivered the mempool (ms).
+    last_pool_ms: Option<u64>,
+    /// Second of the last tick, so ages and freshness redraw once a second.
+    last_tick_sec: u64,
 }
 
 fn matches_filter(e: &TxEntry, filter: &str) -> bool {
@@ -188,6 +208,8 @@ impl App {
             block_flash_until: 0,
             banner: None,
             clock_ms: 0,
+            last_pool_ms: None,
+            last_tick_sec: 0,
         };
         app.viz.set_motion(ui.motion);
         app
@@ -208,7 +230,14 @@ impl App {
                 self.tokens.insert(m.token_id.clone(), m);
             }
             other => {
+                let mempool_from = match &other {
+                    SourceEvent::Mempool { source, .. } => Some(source.clone()),
+                    _ => None,
+                };
                 let updates = self.rec.apply(other, now_ms, &self.cls);
+                if mempool_from.is_some() && mempool_from.as_ref() == self.rec.active() {
+                    self.last_pool_ms = Some(now_ms);
+                }
                 self.on_updates(&updates, now_ms);
             }
         }
@@ -486,22 +515,60 @@ impl App {
         }
     }
 
-    pub fn source_summary(&self) -> String {
+    pub fn freshness(&self, now_ms: u64) -> Freshness {
         let views = self.rec.views();
-        let lead = match self
+        let active = self
             .rec
             .active()
-            .and_then(|a| views.iter().find(|v| &v.id == a))
-        {
-            Some(v) if v.kind == SourceKind::Node => format!("● {}", v.id),
-            Some(v) => format!("○ explorer fallback: {}", v.id),
-            None if views
-                .iter()
-                .any(|v| v.status == ergotop_core::model::SourceStatus::Unknown) =>
-            {
-                "… connecting to sources".to_string()
+            .and_then(|a| views.iter().find(|v| &v.id == a));
+        match active {
+            Some(v) => {
+                let age = v.last_update_ms.map_or(0, |t| now_ms.saturating_sub(t));
+                let limit = match v.kind {
+                    SourceKind::Node => STALE_NODE_MS,
+                    SourceKind::Explorer => STALE_EXPLORER_MS,
+                };
+                if age > limit {
+                    Freshness::Stale(age)
+                } else {
+                    Freshness::Live(age)
+                }
             }
-            None => "✕ no data source (press 3 for details)".to_string(),
+            None if self.last_pool_ms.is_none()
+                && views
+                    .iter()
+                    .any(|v| v.status == ergotop_core::model::SourceStatus::Unknown) =>
+            {
+                Freshness::Connecting
+            }
+            None => Freshness::Offline(self.last_pool_ms.map(|t| now_ms.saturating_sub(t))),
+        }
+    }
+
+    pub fn source_summary(&self, now_ms: u64) -> String {
+        let views = self.rec.views();
+        let active = self
+            .rec
+            .active()
+            .and_then(|a| views.iter().find(|v| &v.id == a));
+        let name = active.map(|v| match v.kind {
+            SourceKind::Node => v.id.0.clone(),
+            SourceKind::Explorer => format!("explorer fallback: {}", v.id),
+        });
+        let dot = if active.is_some_and(|v| v.kind == SourceKind::Node) {
+            "●"
+        } else {
+            "○"
+        };
+        let lead = match (self.freshness(now_ms), name) {
+            (Freshness::Live(age), Some(n)) => format!("{dot} {n} · {} ago", format::age(age)),
+            (Freshness::Stale(age), Some(n)) => format!("◐ {n} · stale {}", format::age(age)),
+            (Freshness::Connecting, _) => "… connecting to sources".to_string(),
+            (Freshness::Offline(Some(age)), _) => format!(
+                "✕ offline · data {} old (press 3 for details)",
+                format::age(age)
+            ),
+            _ => "✕ no data source (press 3 for details)".to_string(),
         };
         let dots: Vec<String> = views
             .iter()
@@ -551,6 +618,10 @@ impl App {
 
     pub fn tick(&mut self, now_ms: u64) -> bool {
         self.clock_ms = self.clock_ms.max(now_ms);
+        // Ages and the freshness line change every second even without events.
+        let sec = now_ms / 1000;
+        let new_second = sec != self.last_tick_sec;
+        self.last_tick_sec = sec;
         let expired = self.viz.expire_pending(now_ms);
         if !expired.is_empty() {
             for id in &expired {
@@ -567,7 +638,7 @@ impl App {
         {
             self.status = None;
         }
-        animating || had_status || now_ms < self.block_flash_until + 100
+        new_second || animating || had_status || now_ms < self.block_flash_until + 100
     }
 
     pub fn on_key(&mut self, key: KeyEvent, now_ms: u64) -> Action {
@@ -709,6 +780,10 @@ impl App {
                 }
                 self.set_status(format!("Motion {}", if on { "on" } else { "off" }), now_ms);
                 Action::None
+            }
+            KeyCode::Char('r') => {
+                self.set_status("Refreshing sources…".into(), now_ms);
+                Action::Refresh
             }
             KeyCode::Char('?') => {
                 self.overlay = Overlay::Help;
@@ -891,6 +966,16 @@ pub(crate) mod testkit {
                 },
             },
             NOW - 10_000,
+        );
+        // A fresh, unchanged poll so the sample reads as live at NOW.
+        app.on_source_event(
+            SourceEvent::Mempool {
+                source: SourceId("node-a".into()),
+                ids,
+                new_txs: vec![],
+                latency_ms: 21,
+            },
+            NOW - 1_000,
         );
         app.on_source_event(SourceEvent::Price(0.3262), NOW);
         app
@@ -1181,9 +1266,9 @@ mod tests {
         let app = App::new(&specs(), Default::default(), &Default::default());
         assert_eq!(app.max_block_size(), DEFAULT_MAX_BLOCK_SIZE);
         assert!(
-            app.source_summary().contains("connecting"),
+            app.source_summary(NOW).contains("connecting"),
             "{}",
-            app.source_summary()
+            app.source_summary(NOW)
         );
     }
 
@@ -1201,10 +1286,43 @@ mod tests {
             );
         }
         assert!(
-            app.source_summary().contains("no data source"),
+            app.source_summary(NOW).contains("no data source"),
             "{}",
-            app.source_summary()
+            app.source_summary(NOW)
         );
+    }
+
+    #[test]
+    fn freshness_goes_live_then_stale_then_offline() {
+        let mut app = sample_app();
+        assert_eq!(app.freshness(NOW), Freshness::Live(1_000));
+        assert!(app.source_summary(NOW).contains("● node-a · 1s ago"));
+        assert_eq!(app.freshness(NOW + 20_000), Freshness::Stale(21_000));
+        assert!(app
+            .source_summary(NOW + 20_000)
+            .contains("◐ node-a · stale 21s"));
+        for id in ["node-a", "p2p"] {
+            app.on_source_event(
+                SourceEvent::Status {
+                    source: SourceId(id.into()),
+                    status: ergotop_core::model::SourceStatus::Down("timeout".into()),
+                },
+                NOW + 30_000,
+            );
+        }
+        assert_eq!(
+            app.freshness(NOW + 30_000),
+            Freshness::Offline(Some(31_000))
+        );
+        let s = app.source_summary(NOW + 30_000);
+        assert!(s.contains("✕ offline · data 31s old"), "{s}");
+    }
+
+    #[test]
+    fn r_asks_sources_to_refresh() {
+        let mut app = sample_app();
+        assert_eq!(app.on_key(key(KeyCode::Char('r')), NOW), Action::Refresh);
+        assert_eq!(app.status.as_ref().unwrap().0, "Refreshing sources…");
     }
 
     #[test]

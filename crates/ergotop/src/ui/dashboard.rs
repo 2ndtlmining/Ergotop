@@ -6,7 +6,7 @@ use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
 use super::{kv, origin_counts, origin_text, panel, util_color};
-use crate::app::{App, SortKey};
+use crate::app::{App, Freshness, SortKey};
 use crate::format;
 use crate::theme::rgb;
 use ergotop_core::metrics::fee_rate;
@@ -143,10 +143,15 @@ fn blocks(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
 fn tx_table(f: &mut Frame, area: Rect, app: &App, rows: &[&TxEntry], now_ms: u64) {
     let t = app.theme;
     let title = format!(
-        "TRANSACTIONS {} · sort:{} {}{}",
+        "TRANSACTIONS {} · sort:{} {}{}{}",
         rows.len(),
         app.sort.label(),
         app.sort_arrow(),
+        match app.freshness(now_ms) {
+            Freshness::Stale(age) => format!(" · stale {}", format::age(age)),
+            Freshness::Offline(Some(age)) => format!(" · offline, {} old", format::age(age)),
+            _ => String::new(),
+        },
         if app.filter.is_empty() {
             String::new()
         } else {

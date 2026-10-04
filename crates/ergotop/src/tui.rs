@@ -17,7 +17,7 @@ fn frame_interval(fps: u32) -> Duration {
 
 pub async fn run(cfg: Config, addrs: AddressesFile, warnings: Vec<String>) -> anyhow::Result<()> {
     let specs = cfg.sources();
-    let mut rx = spawn_all(&specs, Timing::default(), cache_dir());
+    let (mut rx, refresh) = spawn_all(&specs, Timing::default(), cache_dir());
     let mut app = App::new(&specs, addrs, &cfg.ui);
     if let Some(w) = warnings.first() {
         app.set_status(format!("warning: {w}"), now_ms());
@@ -53,6 +53,7 @@ pub async fn run(cfg: Config, addrs: AddressesFile, warnings: Vec<String>) -> an
                                 app.set_status(format!("Open: {url}"), now_ms());
                             }
                         }
+                        Action::Refresh => refresh.now(),
                         Action::None => {}
                     }
                     dirty = true;
