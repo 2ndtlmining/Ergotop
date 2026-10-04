@@ -21,10 +21,10 @@ expression: s
 │                 │t              Cycle theme                                                        │                 │
 │                 │m              Toggle motion                                                      │                 │
 │                 │r              Refresh all sources now                                            │                 │
+│                 │w              Watch the current filter (alerts on arrive/confirm/drop)           │                 │
+│                 │W              Watch alerts                                                       │                 │
 │                 │?              Help                                                               │                 │
 │                 │q              Quit                                                               │                 │
-│                 │                                                                                  │                 │
-│                 │                                                                                  │                 │
 │                 │                                                                                  │                 │
 │                 │                                                                                  │                 │
 │                 │                                                                                  │                 │

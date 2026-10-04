@@ -70,6 +70,8 @@ ergotop --no-state           # ignore (and don't write) the remembered in-app ch
 | `t` | Cycle theme (neon-green, amber-terminal, blue-ice, high-contrast) |
 | `m` | Toggle motion (animations on/off) |
 | `r` | Refresh all sources now (also cuts a failure backoff short) |
+| `w` | Watch the current filter (see below); `w` again stops |
+| `W` | Watch alerts |
 | `?` | Help |
 | `q` | Quit |
 
@@ -90,6 +92,12 @@ Press `/` and type space-separated terms; a transaction must match all of them. 
 While typing a filter, `↑`/`↓` recall earlier ones (the last 20 are remembered in `state.toml`).
 
 Example: `spectrum >100 !age<30s` shows Spectrum transactions over 100 ERG that have been waiting at least 30 seconds.
+
+### Watch
+
+Set a filter, then press `w`: Ergotop alerts (status line for 10 s, terminal bell, and the `W` log) when a matching transaction enters the mempool, is confirmed in a block, or drops out. Typical use: `addr:<your address>` then `w`, and leave it running. The header shows `◉ watch: …`; the watched filter is remembered in `state.toml`, and a restart doesn't re-alert for matches already in the mempool. `watch_bell = false` under `[ui]` turns the bell off.
+
+### Status bar
 
 The status bar shows the active source and how fresh its data is: `● node-a · 1s ago` (your node), `○ explorer fallback: p2p · 3s ago`, `◐ node-a · stale 42s` (no update for over 10 s from a node or 30 s from an explorer; also shown in the TRANSACTIONS title), `✕ offline · data 1m 12s old` (no usable source, last data kept on screen), or `… connecting to sources`. Press `3` to see why a source is down.
 
@@ -155,6 +163,7 @@ whale_erg = 10000                    # highlight txs moving at least this many E
 sort = "rate"                        # rate | fee | value | size | age | origin
 sort_reversed = false
 shape = "rect"                       # rect | hexagon
+watch_bell = true                    # ring the terminal bell on watch alerts
 ```
 
 With no `[[node]]` entries Ergotop tries `http://127.0.0.1:9053`. Environment variables override the file: `ERGO_NODE_URL` (one node), `ERGO_API_URL` (one explorer); command-line flags override both.

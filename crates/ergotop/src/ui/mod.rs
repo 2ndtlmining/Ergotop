@@ -38,6 +38,7 @@ pub fn draw(f: &mut Frame, app: &mut App, now_ms: u64) {
     status_bar(f, foot, app, now_ms);
     match app.overlay {
         Overlay::Help => overlay::help(f, area, app),
+        Overlay::WatchLog => overlay::watch_log(f, area, app),
         Overlay::Detail => overlay::detail(f, area, app, now_ms),
         Overlay::None => {}
     }
@@ -147,10 +148,25 @@ fn header(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
             format::bytes(pool_bytes)
         )),
         Span::styled(
-            format!("mempool {pct}% of block"),
+            format!("mempool {pct}% of block  "),
             Style::new().fg(util_color(pct, &t)),
         ),
     ];
+    let mut spans = spans;
+    if let Some(w) = &app.watch {
+        let n = app.watch_log.len();
+        spans.push(Span::styled(
+            format!(
+                "◉ watch: {w}{}",
+                match n {
+                    0 => String::new(),
+                    1 => " · 1 alert (W)".into(),
+                    n => format!(" · {n} alerts (W)"),
+                }
+            ),
+            Style::new().fg(t.accent).add_modifier(Modifier::BOLD),
+        ));
+    }
     // Keep whole segments only: a cut-off "mempool 1% o" reads worse than nothing.
     let mut used = 0usize;
     let line = Line::from(
@@ -327,6 +343,22 @@ pub(crate) mod tests {
         assert!(!s.contains("Quit"), "last line is below the fold");
         app.overlay_scroll = u16::MAX;
         assert_contains(&screen(&mut app, 100, 22), &["Quit"]);
+    }
+
+    #[test]
+    fn header_shows_the_watch_and_w_lists_alerts() {
+        let mut app = sample_app();
+        app.watch = Some("kucoin".into());
+        app.watch_log = vec!["◉ e5000000 entered: Kucoin, 7.00 ERG".into()];
+        assert_contains(
+            &screen(&mut app, 140, 40),
+            &["◉ watch: kucoin · 1 alert (W)"],
+        );
+        app.overlay = crate::app::Overlay::WatchLog;
+        assert_contains(
+            &screen(&mut app, 140, 40),
+            &["WATCH: kucoin", "e5000000 entered: Kucoin, 7.00 ERG"],
+        );
     }
 
     #[test]

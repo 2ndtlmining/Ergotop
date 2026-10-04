@@ -48,6 +48,11 @@ pub async fn run(
         tokio::select! {
             Some(ev) = rx.recv() => {
                 app.on_source_event(ev, now_ms());
+                if app.take_bell() {
+                    use std::io::Write;
+                    let mut out = std::io::stdout();
+                    let _ = out.write_all(b"\x07").and_then(|_| out.flush());
+                }
                 dirty = true;
             }
             maybe = events.next() => match maybe {
