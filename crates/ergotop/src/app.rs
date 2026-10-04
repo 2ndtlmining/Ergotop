@@ -1,7 +1,7 @@
 //! Pure application state: folds source events and key presses; no terminal I/O.
 use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ergotop_core::classify::{BookEntry, Builtin, Classifier};
@@ -20,6 +20,9 @@ use crate::viz::{Visualizer, VizItem};
 /// Ergo `maxBlockSize` (explorer /api/v1/epochs/params, 2026-10-03); used until a node reports it.
 pub const DEFAULT_MAX_BLOCK_SIZE: u32 = 1_271_009;
 const STATUS_MS: u64 = 3_000;
+/// Watch alerts stay up longer than ordinary status messages.
+const WATCH_STATUS_MS: u64 = 10_000;
+const WATCH_LOG: usize = 50;
 const BLOCK_FLASH_MS: u64 = 1_500;
 const PAGE: usize = 10;
 const FILTER_HISTORY: usize = 20;
@@ -106,6 +109,7 @@ pub enum Overlay {
     None,
     Help,
     Detail,
+    WatchLog,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -148,6 +152,14 @@ pub struct App {
     pub filtering: bool,
     /// Applied filters, oldest first; Up/Down recall them while typing a filter.
     pub filter_history: Vec<String>,
+    /// The filter being watched (`w`): matching txs entering, confirming or dropping alert.
+    pub watch: Option<String>,
+    /// Watched txs seen in the pool, so confirmations and drops can be reported.
+    watched: HashSet<TxId>,
+    /// Recent watch alerts, oldest first.
+    pub watch_log: Vec<String>,
+    watch_bell: bool,
+    bell: bool,
     history_pos: Option<usize>,
     pub sort: SortKey,
     /// Sort opposite to the key's natural direction (`S`).
@@ -207,6 +219,11 @@ impl App {
             filter: String::new(),
             filtering: false,
             filter_history: ui.filter_history.clone(),
+            watch: Some(ui.watch.trim().to_string()).filter(|w| !w.is_empty()),
+            watched: HashSet::new(),
+            watch_log: Vec::new(),
+            watch_bell: ui.watch_bell,
+            bell: false,
             history_pos: None,
             sort: SortKey::parse(&ui.sort),
             sort_reversed: ui.sort_reversed,
@@ -247,6 +264,7 @@ impl App {
             sort_reversed: Some(self.sort_reversed),
             motion: Some(self.viz.motion),
             filter_history: Some(self.filter_history.clone()),
+            watch: Some(self.watch.clone().unwrap_or_default()),
             shape: Some(
                 match self.viz.shape {
                     Shape::Rect => "rect",
@@ -289,6 +307,7 @@ impl App {
     }
 
     fn on_updates(&mut self, updates: &[Update], now_ms: u64) {
+        self.watch_updates(updates, now_ms);
         let mut changed = false;
         let mut animate = true;
         for u in updates {
@@ -651,6 +670,110 @@ impl App {
         self.status = Some((msg, now_ms + STATUS_MS));
     }
 
+    /// True once after a watch alert (the terminal rings the bell).
+    pub fn take_bell(&mut self) -> bool {
+        std::mem::take(&mut self.bell)
+    }
+
+    /// `w`: watch the current filter, or stop watching.
+    fn toggle_watch(&mut self, now_ms: u64) {
+        let f = self.filter.trim().to_string();
+        if self.watch.is_some() && (f.is_empty() || self.watch.as_deref() == Some(f.as_str())) {
+            self.watch = None;
+            self.watched.clear();
+            self.set_status("Stopped watching".into(), now_ms);
+            return;
+        }
+        if f.is_empty() {
+            self.set_status(
+                "Type a filter with / first, then w to watch it".into(),
+                now_ms,
+            );
+            return;
+        }
+        self.watched = self.watch_matches(&f);
+        let msg = format!(
+            "Watching \"{f}\": {} in the mempool now; alerts when matches arrive, confirm or drop",
+            self.watched.len()
+        );
+        self.watch = Some(f);
+        self.set_status(msg, now_ms);
+    }
+
+    fn watch_matches(&self, filter: &str) -> HashSet<TxId> {
+        let f = Filter::parse(filter);
+        self.rec
+            .pool()
+            .values()
+            .filter(|e| f.matches(e, self.clock_ms, &self.tokens))
+            .map(|e| e.tx.id.clone())
+            .collect()
+    }
+
+    fn watch_updates(&mut self, updates: &[Update], now_ms: u64) {
+        let Some(watch) = self.watch.clone() else {
+            return;
+        };
+        let f = Filter::parse(&watch);
+        let mut alerts = Vec::new();
+        for u in updates {
+            match u {
+                Update::Added(ids) => {
+                    for id in ids {
+                        let Some(e) = self.rec.pool().get(id) else {
+                            continue;
+                        };
+                        if f.matches(e, now_ms, &self.tokens) && self.watched.insert(id.clone()) {
+                            alerts.push(format!(
+                                "◉ {} entered: {}, {} ERG",
+                                format::short_id(id),
+                                e.class.class.name,
+                                format::erg(e.metrics.value)
+                            ));
+                        }
+                    }
+                }
+                Update::Mined { height, tx_ids } => {
+                    for id in tx_ids {
+                        if self.watched.remove(id) {
+                            alerts.push(format!(
+                                "✓ {} confirmed in #{}",
+                                format::short_id(id),
+                                format::thousands(u64::from(*height))
+                            ));
+                        }
+                    }
+                }
+                Update::Dropped(ids) => {
+                    for id in ids {
+                        if self.watched.remove(id) {
+                            alerts.push(format!("✕ {} dropped", format::short_id(id)));
+                        }
+                    }
+                }
+                // A rebuilt pool is not news: pick up matches without alerting.
+                Update::Resynced => {
+                    let now = self.watch_matches(&watch);
+                    self.watched.extend(now);
+                }
+                Update::BlockAdded(_) | Update::SourcesChanged => {}
+            }
+        }
+        if alerts.is_empty() {
+            return;
+        }
+        let msg = if alerts.len() == 1 {
+            format!("watch: {}", alerts[0])
+        } else {
+            format!("watch: {} (+{} more)", alerts[0], alerts.len() - 1)
+        };
+        self.status = Some((msg, now_ms + WATCH_STATUS_MS));
+        self.watch_log.extend(alerts);
+        let excess = self.watch_log.len().saturating_sub(WATCH_LOG);
+        self.watch_log.drain(..excess);
+        self.bell = self.watch_bell;
+    }
+
     pub fn tick(&mut self, now_ms: u64) -> bool {
         self.clock_ms = self.clock_ms.max(now_ms);
         // Ages and the freshness line change every second even without events.
@@ -824,6 +947,15 @@ impl App {
                     self.relayout(false);
                 }
                 self.set_status(format!("Motion {}", if on { "on" } else { "off" }), now_ms);
+                Action::None
+            }
+            KeyCode::Char('w') => {
+                self.toggle_watch(now_ms);
+                Action::None
+            }
+            KeyCode::Char('W') => {
+                self.overlay = Overlay::WatchLog;
+                self.overlay_scroll = 0;
                 Action::None
             }
             KeyCode::Char('r') => {
@@ -1552,6 +1684,130 @@ mod tests {
             new_txs,
             latency_ms: 20,
         }
+    }
+
+    #[test]
+    fn w_needs_a_filter_then_toggles_watching_it() {
+        let mut app = sample_app();
+        app.on_key(key(KeyCode::Char('w')), NOW);
+        assert_eq!(app.watch, None);
+        assert!(app.status.as_ref().unwrap().0.contains("filter"));
+        app.filter = "kucoin".into();
+        app.on_key(key(KeyCode::Char('w')), NOW);
+        assert_eq!(app.watch.as_deref(), Some("kucoin"));
+        assert!(app
+            .status
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("1 in the mempool now"));
+        assert_eq!(app.ui_state().watch.as_deref(), Some("kucoin"));
+        app.on_key(key(KeyCode::Char('w')), NOW);
+        assert_eq!(app.watch, None);
+        assert_eq!(app.ui_state().watch.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn watch_alerts_when_a_match_enters_and_confirms() {
+        let mut app = sample_app();
+        app.filter = "kucoin".into();
+        app.on_key(key(KeyCode::Char('w')), NOW);
+        app.filter.clear();
+        assert!(!app.take_bell(), "starting a watch is not an alert");
+        let e5 = tx("e5", 300, KUCOIN, vec![bx(WALLET, 7_000_000_000)]);
+        let all = vec![tid("a1"), tid("b2"), tid("c3"), tid("d4"), tid("e5")];
+        app.on_source_event(node_mempool(all, vec![e5]), NOW + 1_000);
+        assert!(app.status.as_ref().unwrap().0.contains("e5000000 entered"));
+        assert!(app.take_bell());
+        assert!(!app.take_bell(), "taken once");
+        // A non-matching tx arriving says nothing.
+        let f6 = tx("f6", 300, WALLET, vec![bx(CONTRACT, 1)]);
+        let all = vec![
+            tid("a1"),
+            tid("b2"),
+            tid("c3"),
+            tid("d4"),
+            tid("e5"),
+            tid("f6"),
+        ];
+        app.on_source_event(node_mempool(all, vec![f6]), NOW + 2_000);
+        assert!(!app.take_bell());
+        app.on_source_event(
+            SourceEvent::Block {
+                source: SourceId("node-a".into()),
+                block: Block {
+                    id: "hdr-2".into(),
+                    height: 1_886_102,
+                    timestamp_ms: NOW + 3_000,
+                    size: 1000,
+                    tx_ids: vec![tid("a1")],
+                    miner_address: None,
+                    miner_reward: 0,
+                },
+            },
+            NOW + 3_000,
+        );
+        let rest = vec![tid("b2"), tid("c3"), tid("d4"), tid("e5"), tid("f6")];
+        app.on_source_event(node_mempool(rest, vec![]), NOW + 4_000);
+        let log = app.watch_log.join(
+            "
+",
+        );
+        assert!(log.contains("a1000000 confirmed in #1,886,102"), "{log}");
+        assert!(app.take_bell());
+    }
+
+    #[test]
+    fn shift_w_opens_the_watch_log() {
+        let mut app = sample_app();
+        app.on_key(key(KeyCode::Char('W')), NOW);
+        assert_eq!(app.overlay, Overlay::WatchLog);
+        app.on_key(key(KeyCode::Esc), NOW);
+        assert_eq!(app.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn a_remembered_watch_is_quiet_at_startup_but_reports_confirmations() {
+        let ui = UiConfig {
+            watch: "kucoin".into(),
+            ..Default::default()
+        };
+        let mut app = App::new(&specs(), Default::default(), &ui);
+        app.on_source_event(
+            SourceEvent::AddressBook(vec![ergotop_core::classify::BookEntry {
+                address: KUCOIN.into(),
+                name: "Kucoin".into(),
+                kind: ergotop_core::classify::Kind::Exchange,
+            }]),
+            NOW,
+        );
+        let a1 = tx("a1", 412, KUCOIN, vec![bx(WALLET, 12_000_000_000)]);
+        app.on_source_event(node_mempool(vec![tid("a1")], vec![a1]), NOW);
+        assert!(!app.take_bell(), "the first pool is not news");
+        assert!(app.watch_log.is_empty());
+        app.on_source_event(
+            SourceEvent::Block {
+                source: SourceId("node-a".into()),
+                block: Block {
+                    id: "hdr-9".into(),
+                    height: 1_886_200,
+                    timestamp_ms: NOW + 1_000,
+                    size: 500,
+                    tx_ids: vec![tid("a1")],
+                    miner_address: None,
+                    miner_reward: 0,
+                },
+            },
+            NOW + 1_000,
+        );
+        app.on_source_event(node_mempool(vec![], vec![]), NOW + 2_000);
+        assert!(
+            app.watch_log
+                .iter()
+                .any(|l| l.contains("a1000000 confirmed")),
+            "{:?}",
+            app.watch_log
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@ use super::{kv, origin_text, panel};
 use crate::app::{App, EXPLORER_TX_URL};
 use crate::format;
 
-const KEYS: [(&str, &str); 17] = [
+const KEYS: [(&str, &str); 19] = [
     ("1 2 3", "Dashboard / Packing / Sources"),
     ("↑ ↓ PgUp PgDn", "Move selection (detail: scroll)"),
     ("g G Home End", "Top / bottom"),
@@ -31,6 +31,11 @@ const KEYS: [(&str, &str); 17] = [
     ("t", "Cycle theme"),
     ("m", "Toggle motion"),
     ("r", "Refresh all sources now"),
+    (
+        "w",
+        "Watch the current filter (alerts on arrive/confirm/drop)",
+    ),
+    ("W", "Watch alerts"),
     ("?", "Help"),
     ("q", "Quit"),
 ];
@@ -64,6 +69,25 @@ fn scrolled(f: &mut Frame, r: Rect, app: &mut App, title: &str, lines: Vec<Line<
         r,
     );
     app.overlay_scroll = scroll;
+}
+
+/// `W`: watch alerts, newest first.
+pub fn watch_log(f: &mut Frame, area: Rect, app: &mut App) {
+    let r = centered(area, 70, 70);
+    let title = match &app.watch {
+        Some(w) => format!("WATCH: {w}"),
+        None => "WATCH (off: set a filter with /, then w)".into(),
+    };
+    let mut lines: Vec<Line> = app
+        .watch_log
+        .iter()
+        .rev()
+        .map(|l| Line::from(l.clone()))
+        .collect();
+    if lines.is_empty() {
+        lines.push(Line::from("No alerts yet."));
+    }
+    scrolled(f, r, app, &title, lines);
 }
 
 pub fn help(f: &mut Frame, area: Rect, app: &mut App) {

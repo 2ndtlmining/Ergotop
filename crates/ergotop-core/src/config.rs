@@ -55,6 +55,10 @@ pub struct UiConfig {
     pub shape: String,
     /// Recent filters (normally kept in state.toml, not set by hand).
     pub filter_history: Vec<String>,
+    /// Filter being watched (`w`); empty = none.
+    pub watch: String,
+    /// Ring the terminal bell on watch alerts.
+    pub watch_bell: bool,
 }
 
 impl Default for UiConfig {
@@ -69,6 +73,8 @@ impl Default for UiConfig {
             sort_reversed: false,
             shape: "rect".into(),
             filter_history: Vec::new(),
+            watch: String::new(),
+            watch_bell: true,
         }
     }
 }
@@ -165,6 +171,7 @@ pub struct UiState {
     pub motion: Option<bool>,
     pub shape: Option<String>,
     pub filter_history: Option<Vec<String>>,
+    pub watch: Option<String>,
 }
 
 impl UiState {
@@ -190,6 +197,9 @@ impl UiState {
         }
         if let Some(v) = &self.filter_history {
             ui.filter_history = v.clone();
+        }
+        if let Some(v) = &self.watch {
+            ui.watch = v.clone();
         }
     }
 }
