@@ -970,7 +970,8 @@ impl App {
                     Shape::Rect => Shape::Hexagon,
                     Shape::Hexagon => Shape::Rect,
                 };
-                self.relayout(false);
+                // Slide into the new shape so the toggle is visible.
+                self.relayout(true);
                 Action::None
             }
             KeyCode::Char('t') => {
@@ -1676,6 +1677,18 @@ mod tests {
         let h: Vec<_> = app.history.iter().map(|s| (s.txs, s.median_rate)).collect();
         assert_eq!(h, vec![(4, 930), (4, 930)]);
         assert_eq!(app.history[0].bytes, 412 + 2150 + 300 + 20_000);
+    }
+
+    #[test]
+    fn hexagon_toggle_slides_txs_to_their_new_slots() {
+        let mut app = sample_app();
+        app.on_key(key(KeyCode::Char('l')), NOW);
+        let moving = |app: &App, t: u64| app.viz.sprites().filter(|s| !s.tween.done(t)).count();
+        assert!(
+            moving(&app, NOW + 10) > 0,
+            "toggle animates instead of jumping"
+        );
+        assert_eq!(moving(&app, NOW + 5_000), 0, "and settles");
     }
 
     #[test]

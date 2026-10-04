@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use ergotop_core::model::TxId;
-use ergotop_core::packing::{pack, PackItem, PackParams, PackResult, Region, Shape};
+use ergotop_core::packing::{pack, shape_bounds, PackItem, PackParams, PackResult, Region, Shape};
 use ratatui::style::Color;
 
 use crate::anim::{self, Point, Tween};
@@ -349,12 +349,29 @@ impl Visualizer {
                 canvas.set(x as i32, block_height as i32, line);
             }
         }
+        let (lo, hi) = shape_bounds(self.width, block_height, self.shape);
+        if self.shape == Shape::Hexagon {
+            // The slanted sides, so the shape shows even when only its bottom tip is filled.
+            for x in 0..self.width as usize {
+                if lo[x] > 0 {
+                    canvas.set(x as i32, lo[x] as i32 - 1, line);
+                }
+                if hi[x] < block_height {
+                    canvas.set(x as i32, hi[x] as i32, line);
+                }
+            }
+        }
         let level = self.fill_level(now_ms).round() as i32;
         if level >= 2 {
             let phase = now_ms / 150;
             for x in 0..self.width {
                 let wave = ((x as u64 + phase) % 2) as i32;
-                canvas.set(x as i32, (level - 1 - wave).max(0), water);
+                let y = (level - 1 - wave).max(0);
+                // Water stays inside the block's shape.
+                let col = x as usize;
+                if y >= i32::from(lo[col]) && y < i32::from(hi[col]) {
+                    canvas.set(x as i32, y, water);
+                }
             }
         }
         for s in self.sprites() {
@@ -652,6 +669,46 @@ mod tests {
         v.on_dropped(&ids(&["b"]), 20);
         assert_eq!(v.sprites().count(), 0);
         assert!(!v.tick(20));
+    }
+
+    #[test]
+    fn hexagon_mode_draws_its_outline() {
+        let mut v = Visualizer::new();
+        v.set_size(40, 40);
+        v.relayout(&[], CAP, 0, true);
+        let mut c = Canvas::new(40, 40);
+        v.render(&mut c, 0, Color::Gray, BLUE);
+        let lit = |c: &Canvas| {
+            (0..40)
+                .flat_map(|x| (0..30).map(move |y| (x, y)))
+                .filter(|&(x, y)| c.get(x, y).is_some())
+                .count()
+        };
+        assert_eq!(lit(&c), 0, "rect mode: no outline inside the block");
+        v.shape = Shape::Hexagon;
+        v.relayout(&[], CAP, 0, true);
+        let mut c = Canvas::new(40, 40);
+        v.render(&mut c, 0, Color::Gray, BLUE);
+        let (lo, hi) = shape_bounds(40, v.block_height(), Shape::Hexagon);
+        assert_eq!(c.get(0, lo[0] - 1), Some(Color::Gray), "lower-left edge");
+        assert_eq!(c.get(0, hi[0]), Some(Color::Gray), "upper-left edge");
+        assert_eq!(c.get(20, 0), None, "the flat bottom is the floor");
+
+        // Water is clipped to the hexagon: at its level the corner columns stay dry.
+        v.relayout(&[item("a", 50_000, 10)], 1_000_000, 0, true);
+        let mut c = Canvas::new(40, 40);
+        v.render(&mut c, 0, Color::Gray, BLUE);
+        assert!(
+            (0..40).any(|x| (0..30).any(|y| c.get(x, y) == Some(BLUE))),
+            "water drawn"
+        );
+        for y in 0..lo[0] {
+            assert_ne!(
+                c.get(0, y),
+                Some(BLUE),
+                "no water outside the shape at row {y}"
+            );
+        }
     }
 
     #[test]
