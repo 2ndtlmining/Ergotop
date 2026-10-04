@@ -6,7 +6,7 @@ use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
 use super::{kv, origin_counts, origin_text, panel, util_color};
-use crate::app::{App, Freshness, SortKey};
+use crate::app::{App, Freshness, Sample, SortKey};
 use crate::format;
 use crate::theme::rgb;
 use ergotop_core::metrics::fee_rate;
@@ -41,8 +41,12 @@ pub fn draw(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
     let selected_entry = rows.get(app.selected).copied();
     match (left, right) {
         (Some(left), Some(right)) => {
-            let [summary_area, blocks_area] =
-                Layout::vertical([Constraint::Length(10), Constraint::Min(0)]).areas(left);
+            let [summary_area, history_area, blocks_area] = Layout::vertical([
+                Constraint::Length(10),
+                Constraint::Length(HISTORY_ROWS),
+                Constraint::Min(0),
+            ])
+            .areas(left);
             let [net_area, origin_area, detail_area] = Layout::vertical([
                 Constraint::Length(9),
                 Constraint::Length(10),
@@ -50,6 +54,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
             ])
             .areas(right);
             summary(f, summary_area, app, now_ms);
+            history(f, history_area, app);
             blocks(f, blocks_area, app, now_ms);
             network(f, net_area, app);
             origins(f, origin_area, app);
@@ -57,9 +62,14 @@ pub fn draw(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
         }
         (None, Some(right)) => {
             // Network details live in the Sources view; origins in the visualizer legend.
-            let [summary_area, detail_area] =
-                Layout::vertical([Constraint::Length(10), Constraint::Min(0)]).areas(right);
+            let [summary_area, history_area, detail_area] = Layout::vertical([
+                Constraint::Length(10),
+                Constraint::Length(HISTORY_ROWS),
+                Constraint::Min(0),
+            ])
+            .areas(right);
             summary(f, summary_area, app, now_ms);
+            history(f, history_area, app);
             selected(f, detail_area, app, selected_entry, now_ms);
         }
         _ => {}
@@ -142,6 +152,60 @@ fn summary(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
         Paragraph::new(lines).block(panel("MEMPOOL".into(), &t)),
         area,
     );
+}
+
+const HISTORY_ROWS: u16 = 5;
+
+/// Label, value read from a sample, and how to print the latest value.
+type HistoryRow = (&'static str, fn(&Sample) -> u64, fn(u64) -> String);
+
+/// Sparklines of mempool size, bytes and median fee rate over the recent samples.
+fn history(f: &mut Frame, area: Rect, app: &App) {
+    let t = app.theme;
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let rows: [HistoryRow; 3] = [
+        ("Txs", |s| s.txs, |v| v.to_string()),
+        ("Size", |s| s.bytes, format::bytes),
+        (
+            "Rate",
+            |s| s.median_rate,
+            |v| format!("{} n/B", format::rate(v)),
+        ),
+    ];
+    let mut shown = 0;
+    let lines: Vec<Line> = rows
+        .iter()
+        .map(|(label, get, fmt)| {
+            let now = app
+                .history
+                .back()
+                .map(get)
+                .map(fmt)
+                .unwrap_or_else(|| "-".into());
+            let width = inner_w.saturating_sub(6 + 1 + now.chars().count());
+            let values: Vec<u64> = app
+                .history
+                .iter()
+                .rev()
+                .take(width)
+                .rev()
+                .map(get)
+                .collect();
+            shown = values.len();
+            Line::from(vec![
+                Span::styled(format!("{label:<6}"), Style::new().fg(t.dim)),
+                Span::styled(format::spark(&values), Style::new().fg(t.accent)),
+                Span::raw(format!(" {now}")),
+            ])
+        })
+        .collect();
+    let span_min = shown as u64 * crate::app::HISTORY_EVERY_MS / 60_000;
+    let title = if shown < 2 {
+        "HISTORY".to_string()
+    } else {
+        format!("HISTORY · {}m", span_min.max(1))
+    };
+    f.render_widget(Paragraph::new(lines).block(panel(title, &t)), area);
 }
 
 fn blocks(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
