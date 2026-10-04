@@ -10,6 +10,7 @@ Written in Rust (ratatui + tokio). The previous Python/Textual version lives on 
 - **Accurate.** Real fees (the fee output, no guesses), value excluding change, exact mined transactions per block, real `maxBlockSize` from the node, mined vs dropped told apart.
 - **Packing visualizer.** Transactions are selected for the next block by fee per byte, packed bottom-up like the Ergomempool web app, and animated: new ones fall in, mined ones flash and rise out. `l` toggles the ERG hexagon.
 - **Fee rates.** Every transaction's fee per byte (the default sort), mempool median / p90, and the lowest rate still making the next block when it is full. USD values when the ERG price is known; whale transactions are highlighted.
+- **History.** Sparklines of mempool size, bytes and median fee rate (a sample every 10 s, the last hour kept) under the MEMPOOL panel.
 - **Sources view.** Status, latency and transaction count for every node and explorer, plus the transactions only one source has.
 - **Address book.** Classifies transactions with the [ergexplorer.com address book](https://ergexplorer.com/addressbook) (cached, with an offline snapshot built in), your own `addresses.toml`, and built-in contract rules.
 - **Any terminal size.** Three columns from 120 wide, visualizer + table + mempool/selected from 80, visualizer + table below that; table columns are dropped whole by priority instead of being cut.

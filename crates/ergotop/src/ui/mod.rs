@@ -362,6 +362,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn history_panel_shows_sparklines_on_wide_and_medium_layouts() {
+        let mut app = sample_app();
+        app.view = View::Dashboard;
+        for i in 0..6 {
+            app.tick(NOW + i * 10_000);
+        }
+        for (w, h) in [(140, 40), (100, 30)] {
+            let s = screen(&mut app, w, h);
+            assert_contains(&s, &["HISTORY", "Txs", "Size", "Rate", "▄▄▄▄▄▄ 4"]);
+        }
+    }
+
+    #[test]
     fn header_drops_whole_segments_when_narrow() {
         let mut app = sample_app();
         app.view = View::Packing;

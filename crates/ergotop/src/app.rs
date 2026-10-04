@@ -1,7 +1,7 @@
 //! Pure application state: folds source events and key presses; no terminal I/O.
 use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ergotop_core::classify::{BookEntry, Builtin, Classifier};
@@ -23,6 +23,19 @@ const STATUS_MS: u64 = 3_000;
 /// Watch alerts stay up longer than ordinary status messages.
 const WATCH_STATUS_MS: u64 = 10_000;
 const WATCH_LOG: usize = 50;
+/// Mempool history: one sample every 10 s, one hour kept.
+pub const HISTORY_EVERY_MS: u64 = 10_000;
+const HISTORY_LEN: usize = 360;
+
+/// One point of the mempool history charts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sample {
+    pub at_ms: u64,
+    pub txs: u64,
+    pub bytes: u64,
+    /// Median fee rate, nanoERG per byte.
+    pub median_rate: u64,
+}
 const BLOCK_FLASH_MS: u64 = 1_500;
 const PAGE: usize = 10;
 const FILTER_HISTORY: usize = 20;
@@ -158,6 +171,8 @@ pub struct App {
     watched: HashSet<TxId>,
     /// Recent watch alerts, oldest first.
     pub watch_log: Vec<String>,
+    /// Mempool history for the sparklines, oldest first.
+    pub history: VecDeque<Sample>,
     watch_bell: bool,
     bell: bool,
     history_pos: Option<usize>,
@@ -222,6 +237,7 @@ impl App {
             watch: Some(ui.watch.trim().to_string()).filter(|w| !w.is_empty()),
             watched: HashSet::new(),
             watch_log: Vec::new(),
+            history: VecDeque::new(),
             watch_bell: ui.watch_bell,
             bell: false,
             history_pos: None,
@@ -670,6 +686,29 @@ impl App {
         self.status = Some((msg, now_ms + STATUS_MS));
     }
 
+    /// Records a history sample every `HISTORY_EVERY_MS` once a pool has arrived.
+    fn sample_history(&mut self, now_ms: u64) {
+        if self.last_pool_ms.is_none() {
+            return;
+        }
+        if let Some(last) = self.history.back() {
+            if now_ms < last.at_ms + HISTORY_EVERY_MS {
+                return;
+            }
+        }
+        let pool = self.rec.pool();
+        let sample = Sample {
+            at_ms: now_ms,
+            txs: pool.len() as u64,
+            bytes: pool.values().map(|e| u64::from(e.tx.size)).sum(),
+            median_rate: self.rate_stats().map_or(0, |r| r.median),
+        };
+        self.history.push_back(sample);
+        if self.history.len() > HISTORY_LEN {
+            self.history.pop_front();
+        }
+    }
+
     /// True once after a watch alert (the terminal rings the bell).
     pub fn take_bell(&mut self) -> bool {
         std::mem::take(&mut self.bell)
@@ -780,6 +819,7 @@ impl App {
         let sec = now_ms / 1000;
         let new_second = sec != self.last_tick_sec;
         self.last_tick_sec = sec;
+        self.sample_history(now_ms);
         let expired = self.viz.expire_pending(now_ms);
         if !expired.is_empty() {
             for id in &expired {
@@ -1622,6 +1662,20 @@ mod tests {
             app.ui_state().filter_history,
             Some(vec![">10".to_string(), "kucoin".to_string()])
         );
+    }
+
+    #[test]
+    fn history_samples_every_ten_seconds_once_data_arrives() {
+        let mut app = App::new(&specs(), Default::default(), &Default::default());
+        app.tick(NOW);
+        assert!(app.history.is_empty(), "no data yet, nothing to chart");
+        let mut app = sample_app();
+        app.tick(NOW);
+        app.tick(NOW + 5_000);
+        app.tick(NOW + 10_000);
+        let h: Vec<_> = app.history.iter().map(|s| (s.txs, s.median_rate)).collect();
+        assert_eq!(h, vec![(4, 930), (4, 930)]);
+        assert_eq!(app.history[0].bytes, 412 + 2150 + 300 + 20_000);
     }
 
     #[test]
