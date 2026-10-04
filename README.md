@@ -47,7 +47,12 @@ ergotop                      # interactive TUI
 ergotop --headless           # text output, one line per event
 ergotop --config ./mycfg     # read ergotop.toml / addresses.toml from a directory
 ergotop --log ergotop.log    # write diagnostics to a file
+ergotop --node-url http://192.168.1.50:9053 --view dashboard --theme amber-terminal
+ergotop --sort value --reverse --hexagon --no-motion --fps 10 --whale 500
+ergotop --no-state           # ignore (and don't write) the remembered in-app choices
 ```
+
+`ergotop --help` lists every flag. Theme, view, sort and its direction, motion and hexagon mode chosen in the app are remembered in `state.toml` next to `ergotop.toml` (your `ergotop.toml` is never rewritten). Precedence: defaults < `ergotop.toml` < `state.toml` < environment < flags. Delete `state.toml` to go back to the file's settings.
 
 | Key | Action |
 |---|---|
@@ -95,7 +100,8 @@ Then run `ergotop`: the status bar shows `● node-a` when your node is the live
 Other ways to set the node:
 
 - `ergotop --config /path/to/folder` — read `ergotop.toml` / `addresses.toml` from that folder instead
-- `ERGO_NODE_URL=http://192.168.1.50:9053 ergotop` — a single node, no file needed
+- `ergotop --node-url http://192.168.1.50:9053` (repeat for several nodes) — no file needed
+- `ERGO_NODE_URL=http://192.168.1.50:9053 ergotop` — a single node via the environment
 
 Your own address labels go in `addresses.toml` next to it — see [`examples/addresses.toml`](examples/addresses.toml).
 
@@ -128,9 +134,12 @@ fps = 30
 start_view = "packing"               # dashboard | packing | sources
 motion = true                        # false: no animations
 whale_erg = 10000                    # highlight txs moving at least this many ERG; 0 = off
+sort = "rate"                        # rate | fee | value | size | age | origin
+sort_reversed = false
+shape = "rect"                       # rect | hexagon
 ```
 
-With no `[[node]]` entries Ergotop tries `http://127.0.0.1:9053`. Environment variables override the file: `ERGO_NODE_URL` (one node), `ERGO_API_URL` (one explorer).
+With no `[[node]]` entries Ergotop tries `http://127.0.0.1:9053`. Environment variables override the file: `ERGO_NODE_URL` (one node), `ERGO_API_URL` (one explorer); command-line flags override both.
 
 Nodes work best as full UTXO nodes with `extraIndex = true`: that enables token names, index-lag health and detail for already-mined transactions. Non-indexed nodes still work for the mempool.
 

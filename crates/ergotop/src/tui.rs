@@ -1,10 +1,11 @@
 //! Terminal event loop: source events, key presses and an fps tick; redraw only when dirty.
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crossterm::clipboard::CopyToClipboard;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use crossterm::execute;
-use ergotop_core::config::{cache_dir, AddressesFile, Config};
+use ergotop_core::config::{cache_dir, save_state, AddressesFile, Config};
 use ergotop_core::sources::runtime::{spawn_all, Timing};
 use futures::StreamExt;
 
@@ -15,7 +16,13 @@ fn frame_interval(fps: u32) -> Duration {
     Duration::from_millis(1000 / u64::from(fps.clamp(1, 120)))
 }
 
-pub async fn run(cfg: Config, addrs: AddressesFile, warnings: Vec<String>) -> anyhow::Result<()> {
+/// Runs the TUI. In-app UI choices are saved to `state_dir/state.toml` when they change.
+pub async fn run(
+    cfg: Config,
+    addrs: AddressesFile,
+    warnings: Vec<String>,
+    state_dir: Option<PathBuf>,
+) -> anyhow::Result<()> {
     let specs = cfg.sources();
     let (mut rx, refresh) = spawn_all(&specs, Timing::default(), cache_dir());
     let mut app = App::new(&specs, addrs, &cfg.ui);
@@ -27,6 +34,8 @@ pub async fn run(cfg: Config, addrs: AddressesFile, warnings: Vec<String>) -> an
     let mut tick = tokio::time::interval(frame_interval(cfg.ui.fps));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut dirty = true;
+    let mut saved = app.ui_state();
+    let mut save_failed = false;
 
     let result = loop {
         if dirty {
@@ -55,6 +64,18 @@ pub async fn run(cfg: Config, addrs: AddressesFile, warnings: Vec<String>) -> an
                         }
                         Action::Refresh => refresh.now(),
                         Action::None => {}
+                    }
+                    let state = app.ui_state();
+                    if state != saved {
+                        if let Some(dir) = &state_dir {
+                            if let Err(e) = save_state(dir, &state) {
+                                if !save_failed {
+                                    app.set_status(format!("could not save settings: {e}"), now_ms());
+                                }
+                                save_failed = true;
+                            }
+                        }
+                        saved = state;
                     }
                     dirty = true;
                 }

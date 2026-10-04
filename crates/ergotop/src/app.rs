@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ergotop_core::classify::{BookEntry, Builtin, Classifier};
-use ergotop_core::config::{AddressesFile, LocalAddress, SourceSpec, UiConfig};
+use ergotop_core::config::{AddressesFile, LocalAddress, SourceSpec, UiConfig, UiState};
 use ergotop_core::metrics::{rate_stats, RateStats, FEE_ADDRESS};
 use ergotop_core::model::{
     nano_to_erg, Block, NodeInfo, SourceId, SourceKind, Token, TokenMeta, TxId,
@@ -40,6 +40,14 @@ impl View {
             _ => View::Packing,
         }
     }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            View::Dashboard => "dashboard",
+            View::Packing => "packing",
+            View::Sources => "sources",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +70,23 @@ impl SortKey {
             SortKey::Age => SortKey::Origin,
             SortKey::Origin => SortKey::Rate,
         }
+    }
+
+    pub const ALL: [SortKey; 6] = [
+        SortKey::Rate,
+        SortKey::Fee,
+        SortKey::Value,
+        SortKey::Size,
+        SortKey::Age,
+        SortKey::Origin,
+    ];
+
+    /// The key with this label; unknown labels fall back to fee rate.
+    pub fn parse(s: &str) -> SortKey {
+        SortKey::ALL
+            .into_iter()
+            .find(|k| k.label() == s)
+            .unwrap_or(SortKey::Rate)
     }
 
     pub fn label(self) -> &'static str {
@@ -205,8 +230,8 @@ impl App {
             overlay: Overlay::None,
             filter: String::new(),
             filtering: false,
-            sort: SortKey::Rate,
-            sort_reversed: false,
+            sort: SortKey::parse(&ui.sort),
+            sort_reversed: ui.sort_reversed,
             detail_scroll: 0,
             selected: 0,
             selected_id: None,
@@ -229,7 +254,28 @@ impl App {
             stats_cache: RefCell::new(None),
         };
         app.viz.set_motion(ui.motion);
+        if ui.shape == "hexagon" {
+            app.viz.shape = Shape::Hexagon;
+        }
         app
+    }
+
+    /// The UI choices worth remembering across runs.
+    pub fn ui_state(&self) -> UiState {
+        UiState {
+            theme: Some(self.theme.name.to_string()),
+            view: Some(self.view.name().to_string()),
+            sort: Some(self.sort.label().to_string()),
+            sort_reversed: Some(self.sort_reversed),
+            motion: Some(self.viz.motion),
+            shape: Some(
+                match self.viz.shape {
+                    Shape::Rect => "rect",
+                    Shape::Hexagon => "hexagon",
+                }
+                .to_string(),
+            ),
+        }
     }
 
     pub fn on_source_event(&mut self, ev: SourceEvent, now_ms: u64) {
@@ -1332,6 +1378,36 @@ mod tests {
             NOW + 1_000,
         );
         assert_eq!(app.rate_stats().unwrap().p90, 3_640, "c3 left: recomputed");
+    }
+
+    #[test]
+    fn starts_from_configured_ui_and_reports_changes_to_remember() {
+        let ui = UiConfig {
+            theme: "blue-ice".into(),
+            start_view: "dashboard".into(),
+            sort: "value".into(),
+            sort_reversed: true,
+            shape: "hexagon".into(),
+            motion: false,
+            ..Default::default()
+        };
+        let mut app = App::new(&specs(), Default::default(), &ui);
+        assert_eq!((app.sort, app.sort_reversed), (SortKey::Value, true));
+        assert_eq!(app.viz.shape, Shape::Hexagon);
+        let state = app.ui_state();
+        let mut round = UiConfig::default();
+        state.apply(&mut round);
+        assert_eq!(
+            round,
+            UiConfig {
+                fps: round.fps,
+                whale_erg: round.whale_erg,
+                ..ui
+            }
+        );
+        app.on_key(key(KeyCode::Char('s')), NOW);
+        assert_eq!(app.ui_state().sort.as_deref(), Some("size"));
+        assert_eq!(app.ui_state().sort_reversed, Some(false));
     }
 
     #[test]
