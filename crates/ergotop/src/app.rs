@@ -148,8 +148,11 @@ pub struct App {
     last_tick_sec: u64,
     /// Bumped by every event that can change the pool; keys derived-data caches.
     data_version: u64,
-    stats_cache: RefCell<Option<((u64, u32), Option<RateStats>)>>,
+    stats_cache: RefCell<Option<StatsCacheEntry>>,
 }
+
+/// (data version, max block size) → fee-rate stats computed for them.
+type StatsCacheEntry = ((u64, u32), Option<RateStats>);
 
 /// Sorts by `key` (computed once per row), then tx id so the order is total and stable.
 fn sort_keyed<'a, K: Ord>(v: &mut Vec<&'a TxEntry>, key: impl Fn(&'a TxEntry) -> K) {
