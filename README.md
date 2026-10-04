@@ -62,7 +62,7 @@ ergotop --no-state           # ignore (and don't write) the remembered in-app ch
 | `Enter` | Transaction detail with its explorer link (Sources view: transactions only in that source) |
 | `s` | Cycle sort: fee rate (nanoERG/byte, default) → fee → value → size → age → origin |
 | `S` | Reverse the sort direction (▼/▲ shown on the column) |
-| `/` | Filter: name, kind (`exchange`), tx id prefix, `>100`, `<1` (ERG) |
+| `/` | Filter (see below) |
 | `Esc` | Clear filter / close popup |
 | `c` | Copy tx id (OSC 52 — works over SSH in most terminals); Sources view: the source URL |
 | `e` | Open tx in the explorer; Sources view: open the source URL |
@@ -72,6 +72,22 @@ ergotop --no-state           # ignore (and don't write) the remembered in-app ch
 | `r` | Refresh all sources now (also cuts a failure backoff short) |
 | `?` | Help |
 | `q` | Quit |
+
+### Filter
+
+Press `/` and type space-separated terms; a transaction must match all of them. The table title shows the match count (`TRANSACTIONS 2/348`), and a term that can't be parsed is shown in red in the status bar and ignored.
+
+| Term | Matches |
+|---|---|
+| `kucoin`, `exchange`, `a1b2c3` | origin name, kind or "from" label (contains), or tx id prefix |
+| `>100`, `<1` | value in ERG |
+| `fee>0.01`, `value>=100`, `size<2k`, `rate>1000`, `age>5m` | field comparisons (`< <= > >= =`); size units `b k m`, rate `k`, age `s m h` |
+| `origin:rosen,spectrum` | any of these origins |
+| `addr:9fyeE` | an input or output address starting with this |
+| `token:sigusd`, `token:03faf2` | a box carrying a token with this name (contains) or id prefix |
+| `!term` | not `term`, e.g. `!p2p` |
+
+Example: `spectrum >100 !age<30s` shows Spectrum transactions over 100 ERG that have been waiting at least 30 seconds.
 
 The status bar shows the active source and how fresh its data is: `● node-a · 1s ago` (your node), `○ explorer fallback: p2p · 3s ago`, `◐ node-a · stale 42s` (no update for over 10 s from a node or 30 s from an explorer; also shown in the TRANSACTIONS title), `✕ offline · data 1m 12s old` (no usable source, last data kept on screen), or `… connecting to sources`. Press `3` to see why a source is down.
 

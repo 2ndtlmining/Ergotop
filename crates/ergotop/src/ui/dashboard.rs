@@ -169,7 +169,11 @@ fn tx_table(f: &mut Frame, area: Rect, app: &App, rows: &[&TxEntry], now_ms: u64
     let t = app.theme;
     let title = format!(
         "TRANSACTIONS {} · sort:{} {}{}{}",
-        rows.len(),
+        if app.filter.trim().is_empty() {
+            rows.len().to_string()
+        } else {
+            format!("{}/{}", rows.len(), app.rec.pool().len())
+        },
         app.sort.label(),
         app.sort_arrow(),
         match app.freshness(now_ms) {
