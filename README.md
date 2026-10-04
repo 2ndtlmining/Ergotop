@@ -12,6 +12,7 @@ Written in Rust (ratatui + tokio). The previous Python/Textual version lives on 
 - **Fee rates.** Every transaction's fee per byte (the default sort), mempool median / p90, and the lowest rate still making the next block when it is full. USD values when the ERG price is known; whale transactions are highlighted.
 - **Sources view.** Status, latency and transaction count for every node and explorer, plus the transactions only one source has.
 - **Address book.** Classifies transactions with the [ergexplorer.com address book](https://ergexplorer.com/addressbook) (cached, with an offline snapshot built in), your own `addresses.toml`, and built-in contract rules.
+- **Any terminal size.** Three columns from 120 wide, visualizer + table + mempool/selected from 80, visualizer + table below that; table columns are dropped whole by priority instead of being cut.
 - **Fast.** A full dashboard frame with 10,000 transactions renders in about 1.1 ms (sorted rows are keyed once per sort, fee-rate stats only recomputed when data changes); the UI only redraws when something changes, plus once a second so ages tick.
 
 ## Install

@@ -13,32 +13,57 @@ use ergotop_core::metrics::fee_rate;
 use ergotop_core::model::nano_to_erg;
 use ergotop_core::reconcile::TxEntry;
 
+/// Below these widths the dashboard drops to two columns, then to one.
+const WIDE: u16 = 120;
+const MEDIUM: u16 = 80;
+
 pub fn draw(f: &mut Frame, area: Rect, app: &mut App, now_ms: u64) {
-    let [left, center, right] = Layout::horizontal([
-        Constraint::Length(33),
-        Constraint::Min(40),
-        Constraint::Length(36),
-    ])
-    .areas(area);
-    let [summary_area, blocks_area] =
-        Layout::vertical([Constraint::Length(10), Constraint::Min(0)]).areas(left);
+    let (left, center, right) = if area.width >= WIDE {
+        let [l, c, r] = Layout::horizontal([
+            Constraint::Length(33),
+            Constraint::Min(40),
+            Constraint::Length(36),
+        ])
+        .areas(area);
+        (Some(l), c, Some(r))
+    } else if area.width >= MEDIUM {
+        let [c, r] = Layout::horizontal([Constraint::Min(40), Constraint::Length(33)]).areas(area);
+        (None, c, Some(r))
+    } else {
+        (None, area, None)
+    };
     let [viz_area, table_area] =
         Layout::vertical([Constraint::Percentage(40), Constraint::Min(0)]).areas(center);
-    let [net_area, origin_area, detail_area] = Layout::vertical([
-        Constraint::Length(9),
-        Constraint::Length(10),
-        Constraint::Min(0),
-    ])
-    .areas(right);
-    summary(f, summary_area, app, now_ms);
-    blocks(f, blocks_area, app, now_ms);
     super::packing::viz_panel(f, viz_area, app, now_ms);
     // Filter + sort the pool once per frame; the table and the SELECTED panel share it.
     let rows = app.rows();
     tx_table(f, table_area, app, &rows, now_ms);
-    network(f, net_area, app);
-    origins(f, origin_area, app);
-    selected(f, detail_area, app, rows.get(app.selected).copied(), now_ms);
+    let selected_entry = rows.get(app.selected).copied();
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            let [summary_area, blocks_area] =
+                Layout::vertical([Constraint::Length(10), Constraint::Min(0)]).areas(left);
+            let [net_area, origin_area, detail_area] = Layout::vertical([
+                Constraint::Length(9),
+                Constraint::Length(10),
+                Constraint::Min(0),
+            ])
+            .areas(right);
+            summary(f, summary_area, app, now_ms);
+            blocks(f, blocks_area, app, now_ms);
+            network(f, net_area, app);
+            origins(f, origin_area, app);
+            selected(f, detail_area, app, selected_entry, now_ms);
+        }
+        (None, Some(right)) => {
+            // Network details live in the Sources view; origins in the visualizer legend.
+            let [summary_area, detail_area] =
+                Layout::vertical([Constraint::Length(10), Constraint::Min(0)]).areas(right);
+            summary(f, summary_area, app, now_ms);
+            selected(f, detail_area, app, selected_entry, now_ms);
+        }
+        _ => {}
+    }
 }
 
 fn bar(pct: u64, width: usize) -> String {
@@ -165,7 +190,7 @@ fn tx_table(f: &mut Frame, area: Rect, app: &App, rows: &[&TxEntry], now_ms: u64
     }
     let visible = (area.height - 3) as usize;
     let start = app.selected.saturating_sub(visible - 1);
-    let shown: Vec<Row> = rows
+    let shown: Vec<Vec<Cell>> = rows
         .iter()
         .skip(start)
         .take(visible)
@@ -181,7 +206,7 @@ fn tx_table(f: &mut Frame, area: Rect, app: &App, rows: &[&TxEntry], now_ms: u64
             } else {
                 value
             };
-            Row::new(vec![
+            vec![
                 Cell::from(format::short_id(&e.tx.id)),
                 Cell::from(Line::from(vec![
                     Span::styled("■ ", Style::new().fg(rgb(e.class.class.color))),
@@ -192,7 +217,7 @@ fn tx_table(f: &mut Frame, area: Rect, app: &App, rows: &[&TxEntry], now_ms: u64
                 Cell::from(value),
                 right(format::bytes(e.tx.size as u64)),
                 right(format::age(now_ms.saturating_sub(e.first_seen_ms))),
-            ])
+            ]
         })
         .collect();
     let label = |name: &str, key: SortKey| {
@@ -202,25 +227,28 @@ fn tx_table(f: &mut Frame, area: Rect, app: &App, rows: &[&TxEntry], now_ms: u64
             name.to_string()
         }
     };
-    let header = Row::new(vec![
-        Cell::from("ID"),
-        Cell::from(label("Origin", SortKey::Origin)),
-        right(label("Rate", SortKey::Rate)),
-        right(label("Fee", SortKey::Fee)),
-        right(format!("{:<6}", label("Value", SortKey::Value))),
-        right(label("Size", SortKey::Size)),
-        right(label("Age", SortKey::Age)),
-    ])
+    // ID, Origin, Rate, Fee, Value, Size, Age: shown whole by priority, never cut.
+    const WIDTHS: [u16; 7] = [8, 14, 7, 7, 11, 8, 7];
+    const PRIORITY: [usize; 7] = [0, 2, 4, 1, 6, 3, 5];
+    let keep = super::fit_columns(&WIDTHS, &PRIORITY, area.width.saturating_sub(2));
+    let shown: Vec<Row> = shown
+        .into_iter()
+        .map(|cells| Row::new(super::kept(cells, &keep)))
+        .collect();
+    let header = Row::new(super::kept(
+        vec![
+            Cell::from("ID"),
+            Cell::from(label("Origin", SortKey::Origin)),
+            right(label("Rate", SortKey::Rate)),
+            right(label("Fee", SortKey::Fee)),
+            right(format!("{:<6}", label("Value", SortKey::Value))),
+            right(label("Size", SortKey::Size)),
+            right(label("Age", SortKey::Age)),
+        ],
+        &keep,
+    ))
     .style(Style::new().fg(t.accent).add_modifier(Modifier::BOLD));
-    let widths = [
-        Constraint::Length(8),
-        Constraint::Length(14),
-        Constraint::Length(7),
-        Constraint::Length(7),
-        Constraint::Length(11),
-        Constraint::Length(8),
-        Constraint::Length(7),
-    ];
+    let widths: Vec<Constraint> = super::kept(WIDTHS.map(Constraint::Length).to_vec(), &keep);
     let table = Table::new(shown, widths)
         .header(header)
         .block(block)

@@ -79,6 +79,30 @@ pub(crate) fn origin_counts(app: &App) -> Vec<(&str, Rgb, usize)> {
     v
 }
 
+/// Which fixed-width columns fit in `avail` cells (1-cell gaps), added in `priority`
+/// order; returns a keep-mask in display order. A column is shown whole or not at all.
+pub(crate) fn fit_columns(widths: &[u16], priority: &[usize], avail: u16) -> Vec<bool> {
+    let mut keep = vec![false; widths.len()];
+    let mut used = 0u16;
+    for &i in priority {
+        let need = widths[i] + u16::from(used > 0);
+        if used + need <= avail {
+            keep[i] = true;
+            used += need;
+        }
+    }
+    keep
+}
+
+/// The items whose `keep` flag is set, in order.
+pub(crate) fn kept<T>(items: Vec<T>, keep: &[bool]) -> Vec<T> {
+    items
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(x, &k)| k.then_some(x))
+        .collect()
+}
+
 pub(crate) fn origin_text(e: &TxEntry) -> String {
     match &e.class.from {
         Some(from) => format!("{from} → {}", e.class.class.name),
@@ -104,7 +128,7 @@ fn header(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
         .price
         .map(|p| format!("${p:.4}"))
         .unwrap_or_else(|| "-".into());
-    let line = Line::from(vec![
+    let spans = vec![
         Span::styled(
             " ERGOTOP ",
             Style::new()
@@ -126,7 +150,18 @@ fn header(f: &mut Frame, area: Rect, app: &App, now_ms: u64) {
             format!("mempool {pct}% of block"),
             Style::new().fg(util_color(pct, &t)),
         ),
-    ]);
+    ];
+    // Keep whole segments only: a cut-off "mempool 1% o" reads worse than nothing.
+    let mut used = 0usize;
+    let line = Line::from(
+        spans
+            .into_iter()
+            .take_while(|s| {
+                used += s.content.chars().count();
+                used <= area.width as usize
+            })
+            .collect::<Vec<_>>(),
+    );
     f.render_widget(
         Paragraph::new(line).style(Style::new().bg(t.panel_bg).fg(t.primary)),
         area,
@@ -214,6 +249,73 @@ pub(crate) mod tests {
         app.sort = crate::app::SortKey::Value;
         let s = screen(&mut app, 140, 40);
         assert_contains(&s, &["WHALE ≥ 50 ERG", "100.00 ERG ($32.62)"]);
+    }
+
+    #[test]
+    fn fit_columns_adds_by_priority_and_never_cuts() {
+        // widths 8, 14, 7; priority: 0, 2, 1
+        assert_eq!(
+            fit_columns(&[8, 14, 7], &[0, 2, 1], 100),
+            vec![true, true, true]
+        );
+        assert_eq!(
+            fit_columns(&[8, 14, 7], &[0, 2, 1], 20),
+            vec![true, false, true]
+        );
+        assert_eq!(
+            fit_columns(&[8, 14, 7], &[0, 2, 1], 15),
+            vec![true, false, false]
+        );
+    }
+
+    #[test]
+    fn dashboard_numbers_are_whole_or_absent_at_any_width() {
+        for (w, h) in [(60, 20), (80, 24), (100, 30), (120, 40), (140, 40)] {
+            let mut app = sample_app();
+            app.view = View::Dashboard;
+            let s = screen(&mut app, w, h);
+            assert_contains(&s, &["TRANSACTIONS 4", "c3000000", "3,666", "100.00"]);
+            // A value cut from the left would read "0.00" right after a border or space.
+            assert!(
+                !s.contains(" 0.00 ") && !s.contains("│0.00"),
+                "{w}x{h} cut a value:
+{s}"
+            );
+        }
+    }
+
+    #[test]
+    fn dashboard_keeps_mempool_and_selected_on_medium_terminals() {
+        let mut app = sample_app();
+        app.view = View::Dashboard;
+        let s = screen(&mut app, 100, 30);
+        assert_contains(&s, &["MEMPOOL", "To get in", "SELECTED", "Fee rate"]);
+        let s = screen(&mut app, 70, 24);
+        assert!(
+            !s.contains("NETWORK"),
+            "narrow shows only visualizer + table:
+{s}"
+        );
+    }
+
+    #[test]
+    fn header_drops_whole_segments_when_narrow() {
+        let mut app = sample_app();
+        app.view = View::Packing;
+        let s = screen(&mut app, 70, 20);
+        let top = s.lines().next().unwrap();
+        assert!(
+            top.contains("ERG $0.3262") && !top.contains("mempool"),
+            "{top}"
+        );
+    }
+
+    #[test]
+    fn sources_view_keeps_key_columns_whole_at_80_columns() {
+        let mut app = sample_app();
+        app.view = View::Sources;
+        let s = screen(&mut app, 80, 24);
+        assert_contains(&s, &["node-a", "up", "21ms", "1,886,101"]);
     }
 
     #[test]
