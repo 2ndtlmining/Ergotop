@@ -121,6 +121,8 @@ fn bench_dashboard(c: &mut Criterion) {
         },
         1_000,
     );
+    c.bench_function("rows_10k", |b| b.iter(|| app.rows().len()));
+    c.bench_function("rate_stats_10k", |b| b.iter(|| app.rate_stats()));
     let mut term = Terminal::new(TestBackend::new(200, 60)).unwrap();
     term.draw(|f| ergotop::ui::draw(f, &mut app, 2_000))
         .unwrap();

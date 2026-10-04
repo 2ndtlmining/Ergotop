@@ -1,4 +1,6 @@
 //! Pure application state: folds source events and key presses; no terminal I/O.
+use std::cell::RefCell;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -144,6 +146,19 @@ pub struct App {
     last_pool_ms: Option<u64>,
     /// Second of the last tick, so ages and freshness redraw once a second.
     last_tick_sec: u64,
+    /// Bumped by every event that can change the pool; keys derived-data caches.
+    data_version: u64,
+    stats_cache: RefCell<Option<StatsCacheEntry>>,
+}
+
+/// (data version, max block size) → fee-rate stats computed for them.
+type StatsCacheEntry = ((u64, u32), Option<RateStats>);
+
+/// Sorts by `key` (computed once per row), then tx id so the order is total and stable.
+fn sort_keyed<'a, K: Ord>(v: &mut Vec<&'a TxEntry>, key: impl Fn(&'a TxEntry) -> K) {
+    let mut keyed: Vec<(K, &'a TxEntry)> = v.drain(..).map(|e| (key(e), e)).collect();
+    keyed.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.tx.id.cmp(&b.1.tx.id)));
+    v.extend(keyed.into_iter().map(|(_, e)| e));
 }
 
 fn matches_filter(e: &TxEntry, filter: &str) -> bool {
@@ -210,6 +225,8 @@ impl App {
             clock_ms: 0,
             last_pool_ms: None,
             last_tick_sec: 0,
+            data_version: 0,
+            stats_cache: RefCell::new(None),
         };
         app.viz.set_motion(ui.motion);
         app
@@ -217,6 +234,9 @@ impl App {
 
     pub fn on_source_event(&mut self, ev: SourceEvent, now_ms: u64) {
         self.clock_ms = self.clock_ms.max(now_ms);
+        if !matches!(ev, SourceEvent::Price(_) | SourceEvent::TokenMeta(_)) {
+            self.data_version += 1;
+        }
         match ev {
             SourceEvent::AddressBook(entries) => {
                 self.book = entries;
@@ -364,39 +384,14 @@ impl App {
             .filter(|e| matches_filter(e, &self.filter))
             .collect();
         match self.sort {
-            SortKey::Rate => v.sort_by(|a, b| {
-                let r = |e: &TxEntry| e.metrics.fee as u128 * 1000 / e.tx.size.max(1) as u128;
-                r(b).cmp(&r(a)).then_with(|| a.tx.id.cmp(&b.tx.id))
+            SortKey::Rate => sort_keyed(&mut v, |e| {
+                Reverse(e.metrics.fee as u128 * 1000 / e.tx.size.max(1) as u128)
             }),
-            SortKey::Fee => v.sort_by(|a, b| {
-                b.metrics
-                    .fee
-                    .cmp(&a.metrics.fee)
-                    .then_with(|| a.tx.id.cmp(&b.tx.id))
-            }),
-            SortKey::Value => v.sort_by(|a, b| {
-                b.metrics
-                    .value
-                    .cmp(&a.metrics.value)
-                    .then_with(|| a.tx.id.cmp(&b.tx.id))
-            }),
-            SortKey::Size => v.sort_by(|a, b| {
-                b.tx.size
-                    .cmp(&a.tx.size)
-                    .then_with(|| a.tx.id.cmp(&b.tx.id))
-            }),
-            SortKey::Age => v.sort_by(|a, b| {
-                a.first_seen_ms
-                    .cmp(&b.first_seen_ms)
-                    .then_with(|| a.tx.id.cmp(&b.tx.id))
-            }),
-            SortKey::Origin => v.sort_by(|a, b| {
-                a.class
-                    .class
-                    .name
-                    .cmp(&b.class.class.name)
-                    .then_with(|| a.tx.id.cmp(&b.tx.id))
-            }),
+            SortKey::Fee => sort_keyed(&mut v, |e| Reverse(e.metrics.fee)),
+            SortKey::Value => sort_keyed(&mut v, |e| Reverse(e.metrics.value)),
+            SortKey::Size => sort_keyed(&mut v, |e| Reverse(e.tx.size)),
+            SortKey::Age => sort_keyed(&mut v, |e| e.first_seen_ms),
+            SortKey::Origin => sort_keyed(&mut v, |e| e.class.class.name.as_str()),
         }
         if self.sort_reversed {
             v.reverse();
@@ -424,11 +419,20 @@ impl App {
         self.whale_nano > 0 && e.metrics.value >= self.whale_nano
     }
 
+    /// Fee-rate stats, recomputed only when source data or the block size changed.
     pub fn rate_stats(&self) -> Option<RateStats> {
-        rate_stats(
+        let key = (self.data_version, self.max_block_size());
+        if let Some((k, stats)) = *self.stats_cache.borrow() {
+            if k == key {
+                return stats;
+            }
+        }
+        let stats = rate_stats(
             self.rec.pool().values().map(|e| (e.metrics.fee, e.tx.size)),
-            u64::from(self.max_block_size()),
-        )
+            u64::from(key.1),
+        );
+        *self.stats_cache.borrow_mut() = Some((key, stats));
+        stats
     }
 
     pub fn selected_entry(&self) -> Option<&TxEntry> {
@@ -1316,6 +1320,18 @@ mod tests {
         );
         let s = app.source_summary(NOW + 30_000);
         assert!(s.contains("✕ offline · data 31s old"), "{s}");
+    }
+
+    #[test]
+    fn rate_stats_follow_mempool_changes() {
+        let mut app = sample_app();
+        assert_eq!(app.rate_stats().unwrap().p90, 3_666);
+        assert_eq!(app.rate_stats().unwrap().p90, 3_666, "cached read");
+        app.on_source_event(
+            node_mempool(vec![tid("a1"), tid("b2"), tid("d4")], vec![]),
+            NOW + 1_000,
+        );
+        assert_eq!(app.rate_stats().unwrap().p90, 3_640, "c3 left: recomputed");
     }
 
     #[test]
